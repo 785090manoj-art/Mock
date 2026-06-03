@@ -1,807 +1,677 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PDF Quiz Generator — AI Powered</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+import { useState, useEffect, useRef } from "react";
 
-  <style>
-    :root {
-      --bg:      #080b14;
-      --surface: rgba(255,255,255,0.04);
-      --border:  rgba(255,255,255,0.08);
-      --text:    #e8eaf0;
-      --muted:   rgba(255,255,255,0.38);
-      --accent1: #7f5af0;
-      --accent2: #e16bab;
-      --green:   #2cb67d;
-      --red:     #e85d75;
-      --yellow:  #f5a623;
-    }
+/* ─── Google Fonts ─────────────────────────────────────────────────────── */
+const FONT_LINK = document.createElement("link");
+FONT_LINK.rel = "stylesheet";
+FONT_LINK.href = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap";
+document.head.appendChild(FONT_LINK);
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ─── Constants ────────────────────────────────────────────────────────── */
+const JEE_MAIN_2027  = new Date("2027-04-27T00:00:00");
+const JEE_ADV_2027   = new Date("2027-06-08T00:00:00");
+const START_DATE     = new Date("2025-06-01");
 
-    body {
-      background: var(--bg);
-      background-image:
-        radial-gradient(ellipse 80% 60% at 20% 10%, rgba(127,90,240,0.18) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 50% at 80% 80%, rgba(225,107,171,0.12) 0%, transparent 60%);
-      min-height: 100vh;
-      font-family: 'DM Sans', sans-serif;
-      color: var(--text);
-      padding-bottom: 60px;
-    }
+const DP_CHAPTERS = {
+  Physics: ["Kinematics","Laws of Motion","Work Energy Power","Rotational Motion","Gravitation","Elasticity & Fluids","Thermal Physics","Kinetic Theory","Oscillations","Waves","Ray Optics","Wave Optics","Electrostatics","Current Electricity","Magnetism","EMI & AC","Modern Physics","Semiconductors"],
+  Chemistry: ["Basic Concepts","Atomic Structure","Chemical Bonding","Thermodynamics","Equilibrium","Redox & Electrochemistry","Solid State","Solutions","Surface Chemistry","d-f Block","Coordination Compounds","Haloalkanes","Alcohols & Ethers","Carbonyl Compounds","Amines","Biomolecules","Polymers","GOC"],
+  Mathematics: ["Sets & Relations","Complex Numbers","Quadratic Equations","Sequences & Series","Permutations","Binomial Theorem","Straight Lines","Circles","Conics","3D Geometry","Vectors","Limits & Continuity","Differentiation","Applications of Derivatives","Integrals","Differential Equations","Matrices & Determinants","Probability"],
+};
+const TASK_TYPES = ["PDF Lecture","Notes","Test Planner"];
+const SUB_COLOR  = { Physics:"#60a5fa", Chemistry:"#34d399", Mathematics:"#fbbf24" };
+const SUB_GLOW   = { Physics:"#60a5fa33", Chemistry:"#34d39933", Mathematics:"#fbbf2433" };
+const SUB_ICON   = { Physics:"⚛️", Chemistry:"🧪", Mathematics:"📐" };
 
-    /* ── HEADER ── */
-    .header {
-      text-align: center;
-      padding: 52px 20px 36px;
-    }
-    .badge {
-      display: inline-block;
-      background: rgba(127,90,240,0.14);
-      border: 1px solid rgba(127,90,240,0.35);
-      color: #b69fff;
-      font-size: 10px;
-      letter-spacing: .22em;
-      text-transform: uppercase;
-      padding: 5px 16px;
-      border-radius: 999px;
-      margin-bottom: 18px;
-    }
-    .header h1 {
-      font-family: 'Playfair Display', serif;
-      font-size: clamp(2rem, 6vw, 3.4rem);
-      font-weight: 800;
-      line-height: 1.12;
-      color: #fff;
-      letter-spacing: -.02em;
-      margin-bottom: 12px;
-    }
-    .header h1 span {
-      background: linear-gradient(90deg, #7f5af0, #e16bab);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-    .header p { color: var(--muted); font-size: 15px; }
+/* ─── helpers ──────────────────────────────────────────────────────────── */
+const pad = n => String(n).padStart(2,"0");
+function msToHMS(ms){
+  if(ms<=0)return"00:00:00";
+  const s=Math.floor(ms/1000);
+  return`${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`;
+}
+function getCountdown(target){
+  const diff = target - Date.now();
+  if(diff<=0) return {d:0,h:0,m:0,s:0};
+  return {
+    d: Math.floor(diff/86400000),
+    h: Math.floor((diff%86400000)/3600000),
+    m: Math.floor((diff%3600000)/60000),
+    s: Math.floor((diff%60000)/1000),
+  };
+}
+function todayKey(){ return new Date().toISOString().slice(0,10); }
+function daysSinceStart(){ return Math.max(1,Math.floor((Date.now()-START_DATE)/86400000)+1); }
 
-    /* ── CARD ── */
-    .card {
-      background: var(--surface);
-      backdrop-filter: blur(24px);
-      border: 1px solid var(--border);
-      border-radius: 22px;
-      padding: 32px 28px;
-      max-width: 660px;
-      margin: 0 auto 28px;
-    }
-    @media(max-width:600px){ .card{ padding:22px 16px; margin:0 12px 20px; } }
-
-    /* ── API KEY INPUT ── */
-    .key-section label {
-      display: block;
-      font-size: 12px;
-      color: var(--muted);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-    .key-row {
-      display: flex;
-      gap: 10px;
-    }
-    .key-row input {
-      flex: 1;
-      background: rgba(255,255,255,0.06);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 13px 16px;
-      color: var(--text);
-      font-family: 'DM Sans', monospace;
-      font-size: 14px;
-      outline: none;
-      transition: border-color .2s;
-    }
-    .key-row input:focus { border-color: var(--accent1); }
-    .key-row input::placeholder { color: rgba(255,255,255,0.2); }
-    .key-help {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 7px;
-    }
-    .key-help a { color: #b69fff; text-decoration: none; }
-
-    .divider {
-      height: 1px;
-      background: var(--border);
-      margin: 24px 0;
-    }
-
-    /* ── DROP ZONE ── */
-    .dropzone {
-      border: 2px dashed rgba(255,255,255,0.15);
-      border-radius: 16px;
-      padding: 44px 24px;
-      text-align: center;
-      cursor: pointer;
-      transition: all .22s;
-      position: relative;
-    }
-    .dropzone:hover, .dropzone.drag { border-color: var(--accent1); background: rgba(127,90,240,0.06); }
-    .dropzone.has-file { border-color: var(--green); background: rgba(44,182,125,0.05); }
-    .dropzone input[type=file] {
-      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
-    }
-    .dz-icon { font-size: 36px; margin-bottom: 10px; }
-    .dz-title { color: rgba(255,255,255,0.6); font-size: 14px; margin-bottom: 4px; }
-    .dz-sub { color: rgba(255,255,255,0.28); font-size: 12px; }
-    .dz-file { color: var(--green); font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-
-    /* ── BUTTON ── */
-    .btn-primary {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      width: 100%;
-      padding: 16px;
-      margin-top: 18px;
-      border: none;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--accent1), var(--accent2));
-      color: #fff;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity .2s, transform .1s;
-      letter-spacing: .01em;
-    }
-    .btn-primary:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
-    .btn-primary:disabled { opacity: .35; cursor: not-allowed; transform: none; }
-
-    /* ── ERROR ── */
-    .error-box {
-      margin-top: 14px;
-      padding: 12px 16px;
-      border-radius: 12px;
-      background: rgba(232,93,117,0.1);
-      border: 1px solid rgba(232,93,117,0.3);
-      color: #ffb3be;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-
-    /* ── LOADER ── */
-    .loader {
-      text-align: center;
-      padding: 40px 0 20px;
-    }
-    .spinner {
-      width: 44px; height: 44px;
-      border: 3px solid rgba(255,255,255,0.08);
-      border-top-color: var(--accent1);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-      margin: 0 auto 16px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loader-text { color: var(--muted); font-size: 14px; }
-    .loader-dots span {
-      animation: blink 1.4s infinite;
-      font-size: 18px;
-    }
-    .loader-dots span:nth-child(2){ animation-delay:.2s }
-    .loader-dots span:nth-child(3){ animation-delay:.4s }
-    @keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
-
-    /* ── PROGRESS BAR ── */
-    .prog-wrap {
-      height: 5px;
-      background: rgba(255,255,255,0.07);
-      border-radius: 999px;
-      overflow: hidden;
-      margin-bottom: 26px;
-    }
-    .prog-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--accent1), var(--accent2));
-      border-radius: 999px;
-      transition: width .4s ease;
-    }
-
-    /* ── QUIZ ── */
-    .q-counter { color: var(--muted); font-size: 12px; letter-spacing: .08em; margin-bottom: 8px; }
-    .q-text {
-      color: #fff;
-      font-family: 'Playfair Display', serif;
-      font-size: clamp(15px, 3vw, 19px);
-      font-weight: 700;
-      line-height: 1.55;
-      margin-bottom: 24px;
-    }
-
-    .option-btn {
-      width: 100%;
-      text-align: left;
-      padding: 13px 16px;
-      margin-bottom: 9px;
-      border-radius: 13px;
-      border: 1px solid rgba(255,255,255,0.1);
-      background: rgba(255,255,255,0.025);
-      color: #d4d8e5;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 13px;
-      transition: all .15s;
-    }
-    .option-btn:hover:not(.locked) {
-      border-color: var(--accent1);
-      background: rgba(127,90,240,0.08);
-    }
-    .option-btn.correct {
-      border-color: var(--green);
-      background: rgba(44,182,125,0.1);
-      color: #7fe8be;
-    }
-    .option-btn.wrong {
-      border-color: var(--red);
-      background: rgba(232,93,117,0.1);
-      color: #ffb3be;
-    }
-    .option-btn.locked { cursor: default; }
-
-    .opt-label {
-      width: 28px; height: 28px;
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700;
-      flex-shrink: 0;
-      background: rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.5);
-      transition: all .15s;
-    }
-    .option-btn.correct .opt-label { background: var(--green); color: #fff; }
-    .option-btn.wrong   .opt-label { background: var(--red);   color: #fff; }
-
-    .explanation {
-      margin-top: 14px;
-      padding: 13px 16px;
-      border-radius: 12px;
-      background: rgba(127,90,240,0.08);
-      border: 1px solid rgba(127,90,240,0.22);
-      color: #c4b5fd;
-      font-size: 13px;
-      line-height: 1.65;
-      animation: fadeUp .3s ease;
-    }
-    @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
-
-    .nav-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-top: 22px;
-    }
-    .btn-next {
-      padding: 12px 28px;
-      border: none;
-      border-radius: 12px;
-      background: linear-gradient(135deg, var(--accent1), var(--accent2));
-      color: #fff;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity .2s, transform .1s;
-    }
-    .btn-next:hover { opacity: .9; transform: translateY(-1px); }
-
-    /* ── RESULTS ── */
-    .results-header { text-align: center; padding-bottom: 28px; }
-    .trophy { font-size: 52px; margin-bottom: 8px; }
-    .results-header h2 {
-      font-family: 'Playfair Display', serif;
-      font-size: 26px;
-      font-weight: 800;
-      color: #fff;
-      margin-bottom: 4px;
-    }
-
-    .score-ring-wrap { margin: 0 auto 28px; width: fit-content; }
-    .score-ring {
-      width: 118px; height: 118px;
-      border-radius: 50%;
-      border: 7px solid var(--green);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-    .score-ring.mid { border-color: var(--yellow); }
-    .score-ring.low { border-color: var(--red); }
-    .score-pct { color: #fff; font-family: 'Playfair Display',serif; font-size: 30px; font-weight: 800; line-height: 1; }
-    .score-frac { color: var(--muted); font-size: 12px; margin-top: 3px; }
-
-    .stat-row {
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      margin-bottom: 32px;
-    }
-    .stat-pill {
-      background: rgba(255,255,255,0.05);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 12px 20px;
-      text-align: center;
-      min-width: 80px;
-    }
-    .stat-val { font-family: 'Playfair Display',serif; font-size: 24px; font-weight: 800; }
-    .stat-lbl { color: var(--muted); font-size: 11px; margin-top: 2px; }
-
-    .review-list { margin-bottom: 28px; }
-    .review-lbl {
-      font-size: 11px;
-      color: var(--muted);
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      margin-bottom: 13px;
-    }
-    .review-item {
-      padding: 14px 16px;
-      border-radius: 13px;
-      margin-bottom: 9px;
-      display: flex;
-      gap: 11px;
-      align-items: flex-start;
-    }
-    .review-item.ok  { background: rgba(44,182,125,0.06); border:1px solid rgba(44,182,125,0.2); }
-    .review-item.bad { background: rgba(232,93,117,0.06); border:1px solid rgba(232,93,117,0.2); }
-    .ri-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
-    .ri-q { color: var(--text); font-size: 13px; font-weight: 500; margin-bottom: 4px; }
-    .ri-ans { font-size: 12px; color: var(--muted); }
-    .ri-ans .wrong-a { color: #ffb3be; }
-    .ri-ans .right-a { color: #7fe8be; }
-
-    .btn-retry {
-      display: block;
-      margin: 0 auto;
-      padding: 14px 36px;
-      border: none;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--accent1), var(--accent2));
-      color: #fff;
-      font-family: 'DM Sans', sans-serif;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: opacity .2s, transform .1s;
-    }
-    .btn-retry:hover { opacity:.9; transform:translateY(-1px); }
-
-    /* ── FOOTER ── */
-    .footer {
-      text-align: center;
-      color: rgba(255,255,255,0.12);
-      font-size: 11px;
-      margin-top: 16px;
-    }
-
-    /* ── SCREENS ── */
-    .screen { display: none; }
-    .screen.active { display: block; }
-  </style>
-</head>
-<body>
-
-<!-- ╔══════════════════════════════╗ -->
-<!-- ║         HEADER               ║ -->
-<!-- ╚══════════════════════════════╝ -->
-<header class="header">
-  <div class="badge">AI &middot; PDF &middot; Quiz Generator</div>
-  <h1>PDF se banao apna<br/><span>Smart Quiz</span></h1>
-  <p>PDF upload karo &rarr; AI 10 MCQ banayega &rarr; Score dekho</p>
-</header>
-
-<!-- ╔══════════════════════════════╗ -->
-<!-- ║       UPLOAD SCREEN          ║ -->
-<!-- ╚══════════════════════════════╝ -->
-<div id="screen-upload" class="screen active">
-  <div class="card">
-
-    <!-- API Key -->
-    <div class="key-section">
-      <label>🔑 Anthropic API Key</label>
-      <div class="key-row">
-        <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off" />
-      </div>
-      <p class="key-help">
-        Key yahan sirf browser memory mein rehti hai, kahi nahi jaati. &nbsp;
-        <a href="https://console.anthropic.com/keys" target="_blank">Get API Key &rarr;</a>
-      </p>
-    </div>
-
-    <div class="divider"></div>
-
-    <!-- Drop Zone -->
-    <div class="dropzone" id="dropzone">
-      <input type="file" id="pdfInput" accept=".pdf" />
-      <div id="dz-default">
-        <div class="dz-icon">📄</div>
-        <div class="dz-title">PDF yahan drop karo ya click karke choose karo</div>
-        <div class="dz-sub">Only text-based PDFs · Max ~10 MB</div>
-      </div>
-      <div id="dz-selected" style="display:none">
-        <div class="dz-icon">✅</div>
-        <div class="dz-file" id="dz-filename"></div>
-        <div class="dz-sub">Click to change</div>
-      </div>
-    </div>
-
-    <div id="upload-error" class="error-box" style="display:none"></div>
-
-    <button class="btn-primary" id="btnGenerate" disabled>
-      ✨ Quiz Generate Karo
-    </button>
-  </div>
-</div>
-
-<!-- ╔══════════════════════════════╗ -->
-<!-- ║       LOADING SCREEN         ║ -->
-<!-- ╚══════════════════════════════╝ -->
-<div id="screen-loading" class="screen">
-  <div class="card">
-    <div class="loader">
-      <div class="spinner"></div>
-      <div class="loader-text" id="loader-msg">PDF se text extract ho raha hai...</div>
-      <div class="loader-dots"><span>.</span><span>.</span><span>.</span></div>
-    </div>
-  </div>
-</div>
-
-<!-- ╔══════════════════════════════╗ -->
-<!-- ║         QUIZ SCREEN          ║ -->
-<!-- ╚══════════════════════════════╝ -->
-<div id="screen-quiz" class="screen">
-  <div class="card" id="quiz-card">
-    <div class="prog-wrap">
-      <div class="prog-fill" id="progFill" style="width:10%"></div>
-    </div>
-    <div class="q-counter" id="qCounter">Q 1 / 10</div>
-    <div class="q-text"   id="qText"></div>
-    <div id="optionsWrap"></div>
-    <div id="explanation" class="explanation" style="display:none"></div>
-    <div class="nav-row">
-      <span style="color:var(--muted);font-size:12px" id="answeredCount">0 answered</span>
-      <button class="btn-next" id="btnNext" style="display:none">Next &rarr;</button>
-    </div>
-  </div>
-</div>
-
-<!-- ╔══════════════════════════════╗ -->
-<!-- ║        RESULTS SCREEN        ║ -->
-<!-- ╚══════════════════════════════╝ -->
-<div id="screen-results" class="screen">
-  <div class="card">
-    <div class="results-header">
-      <div class="trophy" id="trophyEmoji">🏆</div>
-      <h2 id="gradeText">Excellent!</h2>
-      <p style="color:var(--muted);font-size:14px">Quiz Complete</p>
-    </div>
-
-    <div class="score-ring-wrap">
-      <div class="score-ring" id="scoreRing">
-        <div class="score-pct" id="scorePct">0%</div>
-        <div class="score-frac" id="scoreFrac">0/10</div>
-      </div>
-    </div>
-
-    <div class="stat-row">
-      <div class="stat-pill">
-        <div class="stat-val" style="color:var(--green)" id="statCorrect">0</div>
-        <div class="stat-lbl">Correct</div>
-      </div>
-      <div class="stat-pill">
-        <div class="stat-val" style="color:var(--red)" id="statWrong">0</div>
-        <div class="stat-lbl">Wrong</div>
-      </div>
-      <div class="stat-pill">
-        <div class="stat-val" style="color:#b69fff" id="statTotal">0</div>
-        <div class="stat-lbl">Total</div>
-      </div>
-    </div>
-
-    <div class="review-list">
-      <div class="review-lbl">📋 Answer Review</div>
-      <div id="reviewItems"></div>
-    </div>
-
-    <button class="btn-retry" id="btnRetry">↑ Naya PDF Try Karo</button>
-  </div>
-</div>
-
-<div class="footer">Powered by Claude AI &nbsp;&middot;&nbsp; PDF.js &nbsp;&middot;&nbsp; Pure HTML</div>
-
-<!-- ══════════════════════════════ -->
-<!--              JS               -->
-<!-- ══════════════════════════════ -->
-<script>
-  // ── PDF.js setup ────────────────────────────────────────────────────────
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-  // ── State ────────────────────────────────────────────────────────────────
-  let currentFile   = null;
-  let questions     = [];
-  let currentQ      = 0;
-  let userAnswers   = {};  // { questionId: 'A'|'B'|'C'|'D' }
-  let revealed      = false;
-
-  // ── DOM refs ─────────────────────────────────────────────────────────────
-  const $ = id => document.getElementById(id);
-  const show = id => { document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); $(id).classList.add('active'); }
-
-  // ── File Input ───────────────────────────────────────────────────────────
-  $('pdfInput').addEventListener('change', e => {
-    const f = e.target.files[0];
-    if (f) setFile(f);
-  });
-
-  const dz = $('dropzone');
-  dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag'); });
-  dz.addEventListener('dragleave', ()  => dz.classList.remove('drag'));
-  dz.addEventListener('drop', e => {
-    e.preventDefault(); dz.classList.remove('drag');
-    const f = e.dataTransfer.files[0];
-    if (f && f.type === 'application/pdf') setFile(f);
-  });
-
-  function setFile(f) {
-    currentFile = f;
-    $('dz-default').style.display = 'none';
-    $('dz-selected').style.display = 'block';
-    $('dz-filename').textContent = '📄 ' + f.name + ' (' + (f.size/1024).toFixed(0) + ' KB)';
-    dz.classList.add('has-file');
-    checkReady();
-  }
-
-  $('apiKey').addEventListener('input', checkReady);
-
-  function checkReady() {
-    const hasKey  = $('apiKey').value.trim().startsWith('sk-');
-    const hasFile = !!currentFile;
-    $('btnGenerate').disabled = !(hasKey && hasFile);
-  }
-
-  // ── Generate ─────────────────────────────────────────────────────────────
-  $('btnGenerate').addEventListener('click', async () => {
-    const apiKey = $('apiKey').value.trim();
-    $('upload-error').style.display = 'none';
-    show('screen-loading');
-
-    try {
-      // Step 1: Extract text
-      setLoaderMsg('📖 PDF se text nikal raha hai...');
-      const text = await extractTextFromPDF(currentFile);
-      if (text.length < 100) throw new Error('PDF mein zyada text nahi mila. Scanned image PDFs support nahi hote.');
-
-      // Step 2: Generate MCQs
-      setLoaderMsg('🤖 Claude MCQs bana raha hai...');
-      questions = await generateMCQs(apiKey, text);
-      if (!questions || questions.length === 0) throw new Error('AI se questions generate nahi hue. Dobara try karo.');
-
-      // Step 3: Start quiz
-      currentQ    = 0;
-      userAnswers = {};
-      startQuiz();
-
-    } catch (err) {
-      show('screen-upload');
-      $('upload-error').style.display = 'block';
-      $('upload-error').textContent = '⚠️ ' + err.message;
-    }
-  });
-
-  function setLoaderMsg(msg) { $('loader-msg').textContent = msg; }
-
-  // ── PDF Text Extraction (PDF.js) ─────────────────────────────────────────
-  async function extractTextFromPDF(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      fullText += content.items.map(item => item.str).join(' ') + '\n';
-    }
-    return fullText.trim();
-  }
-
-  // ── Claude API Call ──────────────────────────────────────────────────────
-  async function generateMCQs(apiKey, text) {
-    const truncated = text.slice(0, 8000);
-
-    const systemPrompt =
-      'You are an expert quiz creator. ' +
-      'Respond ONLY with valid JSON — no markdown, no code fences, no explanation whatsoever.';
-
-    const userPrompt = `
-Based on this document content, create exactly 10 multiple-choice questions.
-
-DOCUMENT:
-"""
-${truncated}
-"""
-
-Return ONLY a JSON object matching this exact schema:
-{
-  "questions": [
-    {
-      "id": 1,
-      "question": "<question text>",
-      "options": { "A": "<option>", "B": "<option>", "C": "<option>", "D": "<option>" },
-      "correct_answer": "<A|B|C|D>",
-      "explanation": "<1-2 sentence explanation>"
-    }
-  ]
+/* ─── Firestore (optional) ─────────────────────────────────────────────── */
+const FIREBASE_CONFIG = null;
+let db=null;
+async function getDB(){
+  if(db) return db;
+  if(!FIREBASE_CONFIG) return null;
+  try{
+    const{initializeApp}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const{getFirestore,doc,setDoc,getDoc}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    const app=initializeApp(FIREBASE_CONFIG);
+    db={fs:getFirestore(app),doc,setDoc,getDoc};
+    return db;
+  }catch{return null;}
+}
+async function cloudSave(key,data){
+  const d=await getDB(); if(!d) return;
+  await d.setDoc(d.doc(d.fs,"jeeOS2027",key),{data:JSON.stringify(data)});
 }
 
-Rules:
-- Exactly 10 questions, IDs 1 to 10
-- correct_answer must be exactly one of: A, B, C, or D
-- Questions must test understanding of the document
-- Distractors should be plausible
-- Return ONLY the JSON object, nothing else`;
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-opus-4-5',
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(()=>({}));
-      throw new Error(errData.error?.message || 'API call failed (status ' + response.status + ')');
-    }
-
-    const data = await response.json();
-    let raw = data.content[0].text.trim();
-    // Strip accidental markdown fences
-    raw = raw.replace(/^```[a-z]*\n?/,'').replace(/\n?```$/,'');
-    const parsed = JSON.parse(raw);
-    return parsed.questions;
-  }
-
-  // ── Quiz Logic ────────────────────────────────────────────────────────────
-  function startQuiz() {
-    show('screen-quiz');
-    renderQuestion();
-  }
-
-  function renderQuestion() {
-    const q = questions[currentQ];
-    const total = questions.length;
-    const pct = ((currentQ + 1) / total) * 100;
-
-    $('progFill').style.width = pct + '%';
-    $('qCounter').textContent = 'Q ' + (currentQ + 1) + ' / ' + total;
-    $('qText').textContent = q.question;
-    $('explanation').style.display = 'none';
-    $('btnNext').style.display = 'none';
-    $('answeredCount').textContent = Object.keys(userAnswers).length + ' answered';
-    revealed = false;
-
-    const wrap = $('optionsWrap');
-    wrap.innerHTML = '';
-    ['A','B','C','D'].forEach(letter => {
-      const btn = document.createElement('button');
-      btn.className = 'option-btn';
-      btn.innerHTML = `<span class="opt-label">${letter}</span><span>${q.options[letter]}</span>`;
-      btn.addEventListener('click', () => pickAnswer(letter));
-      wrap.appendChild(btn);
-    });
-  }
-
-  function pickAnswer(letter) {
-    if (revealed) return;
-    revealed = true;
-    const q = questions[currentQ];
-    userAnswers[q.id] = letter;
-    $('answeredCount').textContent = Object.keys(userAnswers).length + ' answered';
-
-    const btns = $('optionsWrap').querySelectorAll('.option-btn');
-    ['A','B','C','D'].forEach((l, i) => {
-      btns[i].classList.add('locked');
-      if (l === q.correct_answer) btns[i].classList.add('correct');
-      else if (l === letter)      btns[i].classList.add('wrong');
-    });
-
-    $('explanation').textContent = '💡 ' + q.explanation;
-    $('explanation').style.display = 'block';
-    $('btnNext').style.display = 'block';
-    $('btnNext').textContent = (currentQ + 1 < questions.length) ? 'Next →' : 'Results Dekho 🏁';
-  }
-
-  $('btnNext').addEventListener('click', () => {
-    currentQ++;
-    if (currentQ < questions.length) renderQuestion();
-    else showResults();
+/* ─── AI MCQ ───────────────────────────────────────────────────────────── */
+async function generateMCQ(chapter,subject,qNum){
+  const res=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      model:"claude-sonnet-4-20250514",
+      max_tokens:1000,
+      messages:[{role:"user",content:`Generate 1 JEE Advanced-level MCQ for "${chapter}" (${subject}), question #${qNum}. Return ONLY valid JSON, no markdown:
+{"question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","explanation":"..."}`}],
+    }),
   });
+  const data=await res.json();
+  const text=data.content?.find(b=>b.type==="text")?.text||"{}";
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
+}
 
-  // ── Results ───────────────────────────────────────────────────────────────
-  function showResults() {
-    const total   = questions.length;
-    const correct = questions.filter(q => userAnswers[q.id] === q.correct_answer).length;
-    const pct     = Math.round((correct / total) * 100);
+/* ═══════════════════════════════════════════════════════════════════════ */
+/* STYLES                                                                   */
+/* ═══════════════════════════════════════════════════════════════════════ */
+const G = {
+  bg:       "#060612",
+  surface:  "rgba(255,255,255,0.04)",
+  surfaceHover:"rgba(255,255,255,0.07)",
+  border:   "rgba(255,255,255,0.08)",
+  borderBright:"rgba(255,255,255,0.15)",
+  text:     "#f1f5f9",
+  muted:    "#64748b",
+  accent:   "#818cf8",       // indigo
+  accentGlow:"#818cf822",
+  green:    "#34d399",
+  amber:    "#fbbf24",
+  red:      "#f87171",
+  blue:     "#60a5fa",
+  font:     "'Outfit', sans-serif",
+  mono:     "'JetBrains Mono', monospace",
+};
 
-    const grade = pct >= 80 ? ['🏆','Excellent! Zabardast!']
-                : pct >= 60 ? ['🎯','Good Job! Badiya kiya!']
-                : pct >= 40 ? ['💪','Keep Going! Mehnat karo!']
-                :             ['📚','Aur practice karo!'];
+const glassCard = {
+  background: G.surface,
+  backdropFilter: "blur(16px)",
+  WebkitBackdropFilter: "blur(16px)",
+  border: `1px solid ${G.border}`,
+  borderRadius: 20,
+  padding: 20,
+};
 
-    $('trophyEmoji').textContent = grade[0];
-    $('gradeText').textContent   = grade[1];
-    $('scorePct').textContent    = pct + '%';
-    $('scoreFrac').textContent   = correct + '/' + total;
-    $('statCorrect').textContent = correct;
-    $('statWrong').textContent   = total - correct;
-    $('statTotal').textContent   = total;
+/* ═══════════════════════════════════════════════════════════════════════ */
+export default function App(){
+  const [tab, setTab] = useState("home");
+  const [tasks, setTasks] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_tasks")||"{}")}catch{return{}} });
+  const [weights, setWeights] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_weights")||"[]")}catch{return[]} });
+  const [sessions, setSessions] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_sessions")||"[]")}catch{return[]} });
+  const [focusMode, setFocusMode] = useState(false);
+  const [focusTimer, setFocusTimer] = useState({running:false,elapsed:0,start:null});
+  const [pState, setPState] = useState({active:false,subject:"Physics",chapter:"",qNums:"",questions:[],current:0,selected:{},score:null,loading:false});
+  const [newW, setNewW] = useState({label:"",value:""});
+  const [ticker, setTicker] = useState(0);
+  const focusRef = useRef(null);
 
-    const ring = $('scoreRing');
-    ring.className = 'score-ring' + (pct >= 70 ? '' : pct >= 40 ? ' mid' : ' low');
+  useEffect(()=>{ const t=setInterval(()=>setTicker(x=>x+1),1000); return()=>clearInterval(t); },[]);
+  useEffect(()=>{ localStorage.setItem("jee27_tasks",JSON.stringify(tasks)); },[tasks]);
+  useEffect(()=>{ localStorage.setItem("jee27_weights",JSON.stringify(weights)); },[weights]);
+  useEffect(()=>{ localStorage.setItem("jee27_sessions",JSON.stringify(sessions)); },[sessions]);
+  useEffect(()=>{
+    if(focusTimer.running){ focusRef.current=setInterval(()=>setFocusTimer(f=>({...f,elapsed:Date.now()-f.start})),1000); }
+    else clearInterval(focusRef.current);
+    return()=>clearInterval(focusRef.current);
+  },[focusTimer.running]);
 
-    // Review items
-    const reviewWrap = $('reviewItems');
-    reviewWrap.innerHTML = '';
-    questions.forEach((q, i) => {
-      const ok = userAnswers[q.id] === q.correct_answer;
-      const div = document.createElement('div');
-      div.className = 'review-item ' + (ok ? 'ok' : 'bad');
-      div.innerHTML = `
-        <span class="ri-icon">${ok ? '✅' : '❌'}</span>
+  function toggleTask(sub,ch,type){
+    const key=`${sub}__${ch}__${type}`;
+    const next={...tasks,[key]:!tasks[key]};
+    setTasks(next); cloudSave("tasks",next);
+  }
+  function startFocus(){
+    setFocusMode(true);
+    setFocusTimer({running:true,elapsed:0,start:Date.now()});
+    document.documentElement.requestFullscreen?.();
+  }
+  function stopFocus(){
+    setFocusMode(false);
+    const secs=Math.floor(focusTimer.elapsed/1000);
+    if(secs>30){ const next=[...sessions,{date:todayKey(),secs}]; setSessions(next); cloudSave("sessions",next); }
+    setFocusTimer({running:false,elapsed:0,start:null});
+    document.exitFullscreen?.();
+  }
+  async function startPractice(){
+    const{subject,chapter,qNums}=pState;
+    if(!chapter||!qNums.trim()) return;
+    const nums=qNums.split(",").map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)).slice(0,10);
+    if(!nums.length) return;
+    setPState(p=>({...p,loading:true,questions:[],current:0,selected:{},score:null}));
+    try{
+      const qs=[];
+      for(const n of nums){ const q=await generateMCQ(chapter,subject,n); qs.push({...q,qNum:n}); }
+      setPState(p=>({...p,active:true,loading:false,questions:qs}));
+    }catch{ setPState(p=>({...p,loading:false})); alert("AI error"); }
+  }
+
+  const main27  = getCountdown(JEE_MAIN_2027);
+  const adv27   = getCountdown(JEE_ADV_2027);
+  const today   = todayKey();
+  const todaySecs = sessions.filter(s=>s.date===today).reduce((a,b)=>a+b.secs,0);
+
+  /* ── FOCUS OVERLAY ─────────────────────────────────────────────────── */
+  if(focusMode) return(
+    <div style={{position:"fixed",inset:0,background:"#020208",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:G.font,zIndex:9999}}>
+      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at center, #1e1b4b 0%, #020208 70%)",opacity:.6}}/>
+      <div style={{position:"relative",textAlign:"center"}}>
+        <div style={{fontSize:11,letterSpacing:5,color:G.green,marginBottom:20,textTransform:"uppercase"}}>● Focus Mode Active</div>
+        <div style={{fontSize:88,fontWeight:800,color:"#fff",fontFamily:G.mono,lineHeight:1,textShadow:"0 0 60px #818cf866"}}>{msToHMS(focusTimer.elapsed)}</div>
+        <div style={{fontSize:13,color:G.muted,marginTop:12}}>Stay locked in. No distractions.</div>
+        <button onClick={stopFocus} style={{marginTop:48,padding:"12px 48px",background:"transparent",border:`1px solid ${G.red}`,color:G.red,borderRadius:50,cursor:"pointer",fontSize:14,fontFamily:G.font,fontWeight:600,letterSpacing:1}}>END SESSION</button>
+      </div>
+    </div>
+  );
+
+  const TABS=[
+    {id:"home",   icon:"🏠", label:"Home"},
+    {id:"tasks",  icon:"✅", label:"Tasks"},
+    {id:"practice",icon:"⚡",label:"Practice"},
+    {id:"focus",  icon:"🎯", label:"Focus"},
+    {id:"stats",  icon:"📊", label:"Stats"},
+    {id:"weight", icon:"📝", label:"Notes"},
+  ];
+
+  return(
+    <div style={{minHeight:"100vh",background:G.bg,fontFamily:G.font,color:G.text,display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto",position:"relative",overflow:"hidden"}}>
+
+      {/* Deep space background */}
+      <div style={{position:"fixed",inset:0,maxWidth:430,margin:"0 auto",pointerEvents:"none",zIndex:0}}>
+        <div style={{position:"absolute",top:-120,left:-80,width:400,height:400,background:"radial-gradient(circle,#4338ca22 0%,transparent 70%)",borderRadius:"50%"}}/>
+        <div style={{position:"absolute",top:200,right:-100,width:300,height:300,background:"radial-gradient(circle,#0ea5e922 0%,transparent 70%)",borderRadius:"50%"}}/>
+        <div style={{position:"absolute",bottom:100,left:20,width:250,height:250,background:"radial-gradient(circle,#7c3aed11 0%,transparent 70%)",borderRadius:"50%"}}/>
+        {/* stars */}
+        {[...Array(30)].map((_,i)=>(
+          <div key={i} style={{position:"absolute",width:1.5,height:1.5,background:"#fff",borderRadius:"50%",opacity:Math.random()*0.5+0.1,left:`${Math.random()*100}%`,top:`${Math.random()*100}%`}}/>
+        ))}
+      </div>
+
+      {/* Top Header */}
+      <div style={{position:"relative",zIndex:10,padding:"16px 20px 12px",borderBottom:`1px solid ${G.border}`,background:"rgba(6,6,18,0.8)",backdropFilter:"blur(20px)"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:22,fontWeight:800,background:"linear-gradient(135deg,#818cf8,#60a5fa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",letterSpacing:-0.5}}>JEE OS 2027</div>
+            <div style={{fontSize:11,color:G.muted,marginTop:1}}>Day {daysSinceStart()} · {new Date().toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"})}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:11,color:G.green,fontWeight:600}}>MAIN {main27.d}d</div>
+            <div style={{fontSize:11,color:G.amber,fontWeight:600}}>ADV {adv27.d}d</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{flex:1,overflowY:"auto",padding:"16px 16px 88px",position:"relative",zIndex:5}}>
+        {tab==="home"     && <HomeTab main27={main27} adv27={adv27} tasks={tasks} sessions={sessions} todaySecs={todaySecs}/>}
+        {tab==="tasks"    && <TasksTab tasks={tasks} toggleTask={toggleTask}/>}
+        {tab==="practice" && <PracticeTab state={pState} setState={setPState} onStart={startPractice}/>}
+        {tab==="focus"    && <FocusTab onStart={startFocus} sessions={sessions} todaySecs={todaySecs}/>}
+        {tab==="stats"    && <StatsTab sessions={sessions} tasks={tasks}/>}
+        {tab==="weight"   && <WeightTab weights={weights} setWeights={setWeights} newW={newW} setNewW={setNewW} cloudSave={cloudSave}/>}
+      </div>
+
+      {/* Bottom Nav */}
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"rgba(6,6,18,0.92)",backdropFilter:"blur(24px)",borderTop:`1px solid ${G.border}`,display:"flex",zIndex:20}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 0 8px",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,color:tab===t.id?G.accent:G.muted,transition:"color .2s",borderTop:tab===t.id?`2px solid ${G.accent}`:"2px solid transparent"}}>
+            <span style={{fontSize:18}}>{t.icon}</span>
+            <span style={{fontSize:9,fontWeight:600,letterSpacing:.5}}>{t.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ══ HOME ══════════════════════════════════════════════════════════════════ */
+function HomeTab({main27,adv27,tasks,sessions,todaySecs}){
+  const totalTasks = Object.keys(DP_CHAPTERS).flatMap(s=>DP_CHAPTERS[s].flatMap(c=>TASK_TYPES)).length;
+  const doneTasks  = Object.values(tasks).filter(Boolean).length;
+  const pct        = Math.round((doneTasks/totalTasks)*100);
+  const totalSecs  = sessions.reduce((a,b)=>a+b.secs,0);
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+      {/* Target Banner */}
+      <div style={{background:"linear-gradient(135deg,#4338ca,#7c3aed,#2563eb)",borderRadius:20,padding:"20px 22px",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:-20,right:-20,width:120,height:120,background:"rgba(255,255,255,0.05)",borderRadius:"50%"}}/>
+        <div style={{position:"absolute",bottom:-30,left:40,width:80,height:80,background:"rgba(255,255,255,0.04)",borderRadius:"50%"}}/>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.6)",letterSpacing:3,marginBottom:6,textTransform:"uppercase"}}>🎯 Target</div>
+        <div style={{fontSize:26,fontWeight:800,color:"#fff",letterSpacing:-0.5}}>IIT Bombay / Delhi</div>
+        <div style={{fontSize:13,color:"rgba(255,255,255,0.65)",marginTop:4}}>Har din ek kadam aur karib 🚀</div>
+      </div>
+
+      {/* Countdown Cards */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <CountdownCard title="JEE MAIN 2027" date="27 Apr 2027" cd={main27} color="#60a5fa"/>
+        <CountdownCard title="JEE ADV 2027"  date="~Jun 2027"   cd={adv27}  color="#fbbf24"/>
+      </div>
+
+      {/* Overall Progress */}
+      <GCard>
+        <Row><ColLabel>Overall Progress</ColLabel><span style={{fontSize:13,fontWeight:700,color:G.accent}}>{pct}%</span></Row>
+        <ArcProgress value={pct} color={G.accent}/>
+        <div style={{fontSize:11,color:G.muted,textAlign:"center",marginTop:8}}>{doneTasks} / {totalTasks} tasks completed</div>
+        <SubjectMiniProgress tasks={tasks}/>
+      </GCard>
+
+      {/* Today stats */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <GCard style={{textAlign:"center"}}>
+          <ColLabel>Today</ColLabel>
+          <div style={{fontSize:22,fontWeight:800,color:G.green,fontFamily:G.mono}}>{msToHMS(todaySecs*1000)}</div>
+          <div style={{fontSize:10,color:G.muted}}>study time</div>
+        </GCard>
+        <GCard style={{textAlign:"center"}}>
+          <ColLabel>All-time</ColLabel>
+          <div style={{fontSize:22,fontWeight:800,color:G.blue,fontFamily:G.mono}}>{msToHMS(totalSecs*1000)}</div>
+          <div style={{fontSize:10,color:G.muted}}>total hours</div>
+        </GCard>
+      </div>
+
+      {/* Day counter */}
+      <GCard style={{display:"flex",alignItems:"center",gap:14}}>
+        <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#4338ca,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>📅</div>
         <div>
-          <div class="ri-q">${i+1}. ${q.question}</div>
-          ${!ok ? `<div class="ri-ans">
-            Tumhara: <span class="wrong-a">${userAnswers[q.id] ? userAnswers[q.id]+'. '+q.options[userAnswers[q.id]] : 'Skip'}</span>
-            &nbsp;·&nbsp; Sahi: <span class="right-a">${q.correct_answer}. ${q.options[q.correct_answer]}</span>
-          </div>` : ''}
-        </div>`;
-      reviewWrap.appendChild(div);
-    });
+          <div style={{fontSize:12,color:G.muted}}>Preparation started · 1 Jun 2025</div>
+          <div style={{fontSize:18,fontWeight:700,color:G.text}}>Day {daysSinceStart()} of your journey</div>
+        </div>
+      </GCard>
+    </div>
+  );
+}
 
-    show('screen-results');
+function CountdownCard({title,date,cd,color}){
+  return(
+    <div style={{...glassCard,padding:14,border:`1px solid ${color}33`}}>
+      <div style={{fontSize:9,color:color,fontWeight:700,letterSpacing:2,marginBottom:10,textTransform:"uppercase"}}>{title}</div>
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        {[["D",cd.d],["H",cd.h],["M",cd.m],["S",cd.s]].map(([l,v])=>(
+          <div key={l} style={{flex:1,background:"rgba(255,255,255,0.06)",borderRadius:8,padding:"6px 0",textAlign:"center"}}>
+            <div style={{fontSize:20,fontWeight:800,color,fontFamily:G.mono,lineHeight:1}}>{pad(v)}</div>
+            <div style={{fontSize:8,color:G.muted,marginTop:2}}>{l}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:10,color:G.muted,textAlign:"center"}}>📅 {date}</div>
+    </div>
+  );
+}
+
+function ArcProgress({value,color}){
+  const r=52, cx=64, cy=64, circ=2*Math.PI*r;
+  const offset=circ*(1-value/100);
+  return(
+    <div style={{display:"flex",justifyContent:"center",margin:"8px 0 0"}}>
+      <svg width={128} height={80} viewBox="0 0 128 100">
+        <path d={`M${cx-r},${cy} A${r},${r} 0 0,1 ${cx+r},${cy}`} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={10} strokeLinecap="round"/>
+        <path d={`M${cx-r},${cy} A${r},${r} 0 0,1 ${cx+r},${cy}`} fill="none" stroke={color} strokeWidth={10} strokeLinecap="round"
+          strokeDasharray={`${circ/2}`} strokeDashoffset={`${offset/2}`} style={{transition:"stroke-dashoffset .6s ease"}}/>
+        <text x={cx} y={cy-4} textAnchor="middle" fontSize={22} fontWeight={800} fill={color} fontFamily={G.font}>{value}%</text>
+      </svg>
+    </div>
+  );
+}
+
+function SubjectMiniProgress({tasks}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:4}}>
+      {Object.keys(DP_CHAPTERS).map(sub=>{
+        const chs=DP_CHAPTERS[sub];
+        const total=chs.length*TASK_TYPES.length;
+        const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
+        const pct=Math.round((done/total)*100);
+        return(
+          <div key={sub}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:11,color:SUB_COLOR[sub]}}>{SUB_ICON[sub]} {sub}</span>
+              <span style={{fontSize:11,color:G.muted}}>{pct}%</span>
+            </div>
+            <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${pct}%`,background:SUB_COLOR[sub],borderRadius:2,transition:"width .4s"}}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ══ TASKS ══════════════════════════════════════════════════════════════════ */
+function TasksTab({tasks,toggleTask}){
+  const [openSub,setOpenSub]=useState("Physics");
+
+  function subPct(sub){
+    const chs=DP_CHAPTERS[sub];
+    const total=chs.length*TASK_TYPES.length;
+    const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
+    return Math.round((done/total)*100);
   }
 
-  // ── Retry ─────────────────────────────────────────────────────────────────
-  $('btnRetry').addEventListener('click', () => {
-    currentFile = null;
-    questions   = [];
-    currentQ    = 0;
-    userAnswers = {};
-    $('pdfInput').value = '';
-    $('dz-default').style.display = 'block';
-    $('dz-selected').style.display = 'none';
-    dz.classList.remove('has-file','drag');
-    $('upload-error').style.display = 'none';
-    $('btnGenerate').disabled = true;
-    show('screen-upload');
-  });
-</script>
-</body>
-</html>
+  return(
+    <div>
+      {/* Subject tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {Object.keys(DP_CHAPTERS).map(s=>{
+          const active=openSub===s;
+          return(
+            <button key={s} onClick={()=>setOpenSub(s)} style={{flex:1,padding:"10px 4px",background:active?SUB_GLOW[s]:"rgba(255,255,255,0.03)",border:`1px solid ${active?SUB_COLOR[s]+"66":G.border}`,borderRadius:12,color:active?SUB_COLOR[s]:G.muted,cursor:"pointer",fontFamily:G.font,fontWeight:600,transition:"all .2s"}}>
+              <div style={{fontSize:18}}>{SUB_ICON[s]}</div>
+              <div style={{fontSize:10,marginTop:2}}>{s.slice(0,4)}</div>
+              <div style={{fontSize:10,marginTop:1,color:active?SUB_COLOR[s]:G.muted}}>{subPct(s)}%</div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {DP_CHAPTERS[openSub].map((ch,i)=>{
+          const done=TASK_TYPES.filter(t=>tasks[`${openSub}__${ch}__${t}`]).length;
+          const allDone=done===TASK_TYPES.length;
+          return(
+            <div key={ch} style={{...glassCard,padding:"14px 16px",border:`1px solid ${allDone?SUB_COLOR[openSub]+"44":G.border}`,transition:"border .2s"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:24,height:24,borderRadius:6,background:SUB_GLOW[openSub],display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:SUB_COLOR[openSub],fontWeight:700}}>{i+1}</div>
+                  <span style={{fontSize:13,fontWeight:600,color:allDone?SUB_COLOR[openSub]:G.text}}>{ch}</span>
+                </div>
+                <span style={{fontSize:10,color:done===TASK_TYPES.length?G.green:G.muted}}>{done}/{TASK_TYPES.length}</span>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                {TASK_TYPES.map(type=>{
+                  const key=`${openSub}__${ch}__${type}`;
+                  const checked=!!tasks[key];
+                  const icons={"PDF Lecture":"📄","Notes":"📝","Test Planner":"🗓️"};
+                  return(
+                    <button key={type} onClick={()=>toggleTask(openSub,ch,type)} style={{flex:1,padding:"8px 4px",borderRadius:10,background:checked?SUB_GLOW[openSub]:"rgba(255,255,255,0.03)",border:`1px solid ${checked?SUB_COLOR[openSub]+"66":G.border}`,color:checked?SUB_COLOR[openSub]:G.muted,cursor:"pointer",fontFamily:G.font,fontSize:10,fontWeight:600,transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                      <span style={{fontSize:16}}>{checked?"✅":icons[type]}</span>
+                      <span style={{fontSize:9,lineHeight:1.2,textAlign:"center"}}>{type}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ══ PRACTICE ═══════════════════════════════════════════════════════════════ */
+function PracticeTab({state,setState,onStart}){
+  const{active,subject,chapter,qNums,questions,current,selected,score,loading}=state;
+
+  if(loading) return(
+    <div style={{textAlign:"center",paddingTop:100}}>
+      <div style={{fontSize:48,marginBottom:20}}>⚡</div>
+      <div style={{fontSize:16,fontWeight:700,color:G.accent}}>Generating Questions...</div>
+      <div style={{fontSize:12,color:G.muted,marginTop:8}}>AI crafting JEE Advanced-level MCQs</div>
+      <div style={{marginTop:24,display:"flex",justifyContent:"center",gap:6}}>
+        {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:G.accent,animation:`pulse 1.2s ${i*0.2}s infinite alternate`,opacity:0.4}}/>)}
+      </div>
+    </div>
+  );
+
+  if(!active) return(
+    <div>
+      <STitle>⚡ Self Practice</STitle>
+      <GCard>
+        <ColLabel>Select Subject</ColLabel>
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {Object.keys(DP_CHAPTERS).map(s=>{
+            const sel=subject===s;
+            return<button key={s} onClick={()=>setState(p=>({...p,subject:s,chapter:""}))} style={{flex:1,padding:"10px 4px",background:sel?SUB_GLOW[s]:"rgba(255,255,255,0.03)",border:`1px solid ${sel?SUB_COLOR[s]+"66":G.border}`,borderRadius:12,color:sel?SUB_COLOR[s]:G.muted,cursor:"pointer",fontFamily:G.font,fontWeight:600,fontSize:11}}>
+              {SUB_ICON[s]}<br/>{s.slice(0,4)}
+            </button>;
+          })}
+        </div>
+        <ColLabel>Chapter</ColLabel>
+        <select value={chapter} onChange={e=>setState(p=>({...p,chapter:e.target.value}))} style={selStyle}>
+          <option value="">-- Select Chapter --</option>
+          {DP_CHAPTERS[subject].map(ch=><option key={ch}>{ch}</option>)}
+        </select>
+        <ColLabel style={{marginTop:14}}>Question Numbers (comma-separated, max 10)</ColLabel>
+        <input value={qNums} onChange={e=>setState(p=>({...p,qNums:e.target.value}))} placeholder="e.g. 1, 5, 12, 23" style={inpStyle}/>
+        <div style={{fontSize:11,color:G.muted,margin:"10px 0 14px"}}>AI will generate a unique JEE-level MCQ for each number</div>
+        <BigBtn color={G.accent} onClick={onStart} disabled={!chapter||!qNums.trim()}>Generate & Start ⚡</BigBtn>
+      </GCard>
+    </div>
+  );
+
+  if(score!==null){
+    const total=questions.length;
+    const pct=Math.round((score/total)*100);
+    const jeeScore=score*4-(total-score);
+    return(
+      <div>
+        <STitle>📊 Results</STitle>
+        <div style={{...glassCard,textAlign:"center",marginBottom:14,border:`1px solid ${pct>=60?G.green+"44":G.red+"44"}`}}>
+          <div style={{fontSize:56,fontWeight:900,color:pct>=60?G.green:G.red}}>{pct}%</div>
+          <div style={{fontSize:14,color:G.text,marginBottom:4}}>{score} / {total} Correct</div>
+          <div style={{fontSize:12,color:G.muted}}>JEE Score: <span style={{color:jeeScore>=0?G.green:G.red,fontWeight:700}}>+{score*4} – {total-score} = {jeeScore}</span></div>
+        </div>
+        {questions.map((q,i)=>{
+          const ua=selected[i]?.[0]; const ok=ua===q.answer;
+          return(
+            <div key={i} style={{...glassCard,marginBottom:10,border:`1px solid ${ok?"#34d39933":"#f8717133"}`}}>
+              <div style={{fontSize:10,color:G.muted,marginBottom:6}}>Q{q.qNum}</div>
+              <div style={{fontSize:12,color:G.text,marginBottom:10,lineHeight:1.6}}>{q.question}</div>
+              {q.options.map(opt=>(
+                <div key={opt} style={{fontSize:11,padding:"5px 10px",borderRadius:8,marginBottom:4,background:opt[0]===q.answer?"#34d39918":opt[0]===ua&&!ok?"#f8717118":"transparent",color:opt[0]===q.answer?G.green:opt[0]===ua&&!ok?G.red:G.muted}}>{opt}</div>
+              ))}
+              <div style={{fontSize:11,color:"#c4b5fd",marginTop:8,lineHeight:1.5}}>💡 {q.explanation}</div>
+            </div>
+          );
+        })}
+        <BigBtn color={G.accent} onClick={()=>setState(p=>({...p,active:false,questions:[],score:null,qNums:""}))}>New Practice Session</BigBtn>
+      </div>
+    );
+  }
+
+  const q=questions[current];
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <STitle>Q{q.qNum}</STitle>
+        <span style={{fontSize:12,color:SUB_COLOR[subject],fontWeight:600}}>{current+1}/{questions.length}</span>
+      </div>
+      <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,marginBottom:16,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${((current+1)/questions.length)*100}%`,background:G.accent,borderRadius:2,transition:"width .3s"}}/>
+      </div>
+      <GCard>
+        <div style={{fontSize:14,color:G.text,lineHeight:1.7,marginBottom:18}}>{q.question}</div>
+        {q.options.map(opt=>{
+          const sel=selected[current]===opt;
+          return<button key={opt} onClick={()=>setState(p=>({...p,selected:{...p.selected,[current]:opt}}))} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",marginBottom:10,borderRadius:12,background:sel?"rgba(129,140,248,0.12)":"rgba(255,255,255,0.03)",border:`1px solid ${sel?G.accent:G.border}`,color:sel?G.accent:G.text,cursor:"pointer",fontFamily:G.font,fontSize:13,fontWeight:sel?600:400,transition:"all .15s"}}>{opt}</button>;
+        })}
+      </GCard>
+      <div style={{display:"flex",gap:10,marginTop:14}}>
+        {current>0&&<BigBtn color={G.muted} onClick={()=>setState(p=>({...p,current:p.current-1}))}>← Prev</BigBtn>}
+        {current<questions.length-1
+          ?<BigBtn color={G.accent} onClick={()=>setState(p=>({...p,current:p.current+1}))}>Next →</BigBtn>
+          :<BigBtn color={G.green} onClick={()=>{ const{questions:qs,selected:sel}=state; let c=0; qs.forEach((q,i)=>{if(sel[i]?.[0]===q.answer)c++;}); setState(p=>({...p,score:c})); }}>Submit ✓</BigBtn>
+        }
+      </div>
+    </div>
+  );
+}
+
+/* ══ FOCUS ═══════════════════════════════════════════════════════════════════ */
+function FocusTab({onStart,sessions,todaySecs}){
+  const totalSecs=sessions.reduce((a,b)=>a+b.secs,0);
+  return(
+    <div>
+      <STitle>🎯 Focus Mode</STitle>
+      <div style={{...glassCard,textAlign:"center",marginBottom:14,background:"linear-gradient(135deg,rgba(67,56,202,0.2),rgba(124,58,237,0.15))"}}>
+        <div style={{fontSize:52,marginBottom:12}}>🎯</div>
+        <div style={{fontSize:18,fontWeight:700,color:G.text,marginBottom:6}}>Deep Work Session</div>
+        <div style={{fontSize:13,color:G.muted,marginBottom:24}}>Fullscreen lock · All distractions blocked<br/>Timer auto-saves when you end</div>
+        <BigBtn color={G.accent} onClick={onStart}>Enter Focus Mode 🚀</BigBtn>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+        <GCard style={{textAlign:"center"}}>
+          <div style={{fontSize:11,color:G.muted,marginBottom:4}}>Today</div>
+          <div style={{fontSize:24,fontWeight:800,color:G.green,fontFamily:G.mono}}>{msToHMS(todaySecs*1000)}</div>
+        </GCard>
+        <GCard style={{textAlign:"center"}}>
+          <div style={{fontSize:11,color:G.muted,marginBottom:4}}>All Time</div>
+          <div style={{fontSize:24,fontWeight:800,color:G.blue,fontFamily:G.mono}}>{msToHMS(totalSecs*1000)}</div>
+        </GCard>
+      </div>
+      <GCard>
+        <ColLabel>Recent Sessions</ColLabel>
+        {sessions.slice(-6).reverse().map((s,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${G.border}`}}>
+            <span style={{fontSize:12,color:G.muted}}>{s.date}</span>
+            <span style={{fontSize:12,color:G.accent,fontFamily:G.mono,fontWeight:700}}>{msToHMS(s.secs*1000)}</span>
+          </div>
+        ))}
+        {!sessions.length&&<div style={{fontSize:12,color:G.muted,textAlign:"center",padding:16}}>No sessions yet — start your first! 💪</div>}
+      </GCard>
+    </div>
+  );
+}
+
+/* ══ STATS ════════════════════════════════════════════════════════════════════ */
+function StatsTab({sessions,tasks}){
+  const days=Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().slice(0,10); });
+  const weekData=days.map(date=>({date,secs:sessions.filter(s=>s.date===date).reduce((a,b)=>a+b.secs,0)}));
+  const maxSecs=Math.max(...weekData.map(d=>d.secs),1);
+  const totalTasks=Object.keys(DP_CHAPTERS).flatMap(s=>DP_CHAPTERS[s].flatMap(c=>TASK_TYPES)).length;
+  const doneTasks=Object.values(tasks).filter(Boolean).length;
+
+  return(
+    <div>
+      <STitle>📊 Weekly Stats</STitle>
+      <GCard>
+        <ColLabel>Study Time — Last 7 Days</ColLabel>
+        <div style={{display:"flex",alignItems:"flex-end",gap:8,height:90,marginTop:12,marginBottom:4}}>
+          {weekData.map((d,i)=>(
+            <div key={d.date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{width:"100%",background:d.secs?`linear-gradient(180deg,${G.accent},#6366f1)`:G.border,height:`${Math.max(3,(d.secs/maxSecs)*72)}px`,borderRadius:"5px 5px 0 0",transition:"height .4s",opacity:d.secs?1:0.3}}/>
+              <div style={{fontSize:8,color:G.muted}}>{d.date.slice(5)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:11,color:G.muted,textAlign:"right"}}>Total: {msToHMS(weekData.reduce((a,b)=>a+b.secs,0)*1000)}</div>
+      </GCard>
+
+      <GCard style={{marginTop:12}}>
+        <ColLabel>Subject Completion</ColLabel>
+        {Object.keys(DP_CHAPTERS).map(sub=>{
+          const chs=DP_CHAPTERS[sub];
+          const total=chs.length*TASK_TYPES.length;
+          const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
+          const pct=Math.round((done/total)*100);
+          return(
+            <div key={sub} style={{marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                <span style={{fontSize:12,fontWeight:600,color:SUB_COLOR[sub]}}>{SUB_ICON[sub]} {sub}</span>
+                <span style={{fontSize:12,color:G.muted,fontFamily:G.mono}}>{done}/{total}</span>
+              </div>
+              <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${pct}%`,background:SUB_COLOR[sub],borderRadius:3,transition:"width .4s"}}/>
+              </div>
+            </div>
+          );
+        })}
+      </GCard>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:12}}>
+        {[
+          {l:"Tasks Done",v:doneTasks,c:G.green},
+          {l:"Remaining",v:totalTasks-doneTasks,c:G.amber},
+          {l:"Sessions",v:sessions.length,c:G.blue},
+        ].map(({l,v,c})=>(
+          <GCard key={l} style={{textAlign:"center",padding:14}}>
+            <div style={{fontSize:26,fontWeight:800,color:c}}>{v}</div>
+            <div style={{fontSize:10,color:G.muted,marginTop:2}}>{l}</div>
+          </GCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ══ WEIGHT/NOTES ════════════════════════════════════════════════════════════ */
+function WeightTab({weights,setWeights,newW,setNewW,cloudSave}){
+  function add(){
+    if(!newW.label.trim()||!newW.value.trim()) return;
+    const entry={...newW,date:todayKey(),id:Date.now()};
+    const next=[...weights,entry]; setWeights(next); cloudSave("weights",next);
+    setNewW({label:"",value:""});
+  }
+  function remove(id){
+    const next=weights.filter(w=>w.id!==id); setWeights(next); cloudSave("weights",next);
+  }
+  const priorityColor={HIGH:G.red,MEDIUM:G.amber,LOW:G.green};
+
+  return(
+    <div>
+      <STitle>📝 Task Weight Log</STitle>
+      <GCard>
+        <ColLabel>Add Entry</ColLabel>
+        <input value={newW.label} onChange={e=>setNewW(w=>({...w,label:e.target.value}))} placeholder="Task / Topic name" style={inpStyle}/>
+        <input value={newW.value} onChange={e=>setNewW(w=>({...w,value:e.target.value}))} placeholder="Weight / Priority (e.g. HIGH, 3 hrs, 80%)" style={{...inpStyle,marginTop:8}}/>
+        <BigBtn color={G.accent} onClick={add} style={{marginTop:12}}>+ Add Entry</BigBtn>
+      </GCard>
+
+      <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:10}}>
+        {weights.slice().reverse().map(w=>{
+          const pc=priorityColor[w.value.toUpperCase()]||G.accent;
+          return(
+            <div key={w.id} style={{...glassCard,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:G.text}}>{w.label}</div>
+                <div style={{fontSize:10,color:G.muted,marginTop:2}}>{w.date}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:11,color:pc,background:pc+"22",padding:"4px 12px",borderRadius:20,fontWeight:700}}>{w.value}</span>
+                <button onClick={()=>remove(w.id)} style={{background:"none",border:"none",color:G.muted,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
+              </div>
+            </div>
+          );
+        })}
+        {!weights.length&&<div style={{fontSize:12,color:G.muted,textAlign:"center",padding:32}}>No entries yet. Add your first task weight!</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ══ Primitives ══════════════════════════════════════════════════════════════ */
+function GCard({children,style}){
+  return<div style={{...glassCard,...style}}>{children}</div>;
+}
+function ColLabel({children,style}){
+  return<div style={{fontSize:10,letterSpacing:2,color:G.muted,textTransform:"uppercase",marginBottom:8,fontWeight:600,...style}}>{children}</div>;
+}
+function Row({children}){
+  return<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>{children}</div>;
+}
+function STitle({children}){
+  return<div style={{fontSize:16,fontWeight:800,color:G.text,marginBottom:16,letterSpacing:-0.3}}>{children}</div>;
+}
+function BigBtn({children,color,onClick,disabled,style}){
+  return(
+    <button onClick={onClick} disabled={disabled} style={{width:"100%",padding:"13px",background:disabled?"rgba(255,255,255,0.04)":`linear-gradient(135deg,${color}22,${color}11)`,border:`1px solid ${disabled?G.border:color+"66"}`,color:disabled?G.muted:color,borderRadius:12,cursor:disabled?"not-allowed":"pointer",fontFamily:G.font,fontSize:14,fontWeight:700,transition:"all .2s",...style}}>{children}</button>
+  );
+}
+const selStyle={width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${G.border}`,color:G.text,padding:"10px 12px",borderRadius:10,fontFamily:G.font,fontSize:13,marginBottom:14,outline:"none"};
+const inpStyle={width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${G.border}`,color:G.text,padding:"10px 12px",borderRadius:10,fontFamily:G.font,fontSize:13,outline:"none",boxSizing:"border-box"};
