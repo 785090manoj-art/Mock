@@ -1,677 +1,1135 @@
-import { useState, useEffect, useRef } from "react";
-
-/* ─── Google Fonts ─────────────────────────────────────────────────────── */
-const FONT_LINK = document.createElement("link");
-FONT_LINK.rel = "stylesheet";
-FONT_LINK.href = "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap";
-document.head.appendChild(FONT_LINK);
-
-/* ─── Constants ────────────────────────────────────────────────────────── */
-const JEE_MAIN_2027  = new Date("2027-04-27T00:00:00");
-const JEE_ADV_2027   = new Date("2027-06-08T00:00:00");
-const START_DATE     = new Date("2025-06-01");
-
-const DP_CHAPTERS = {
-  Physics: ["Kinematics","Laws of Motion","Work Energy Power","Rotational Motion","Gravitation","Elasticity & Fluids","Thermal Physics","Kinetic Theory","Oscillations","Waves","Ray Optics","Wave Optics","Electrostatics","Current Electricity","Magnetism","EMI & AC","Modern Physics","Semiconductors"],
-  Chemistry: ["Basic Concepts","Atomic Structure","Chemical Bonding","Thermodynamics","Equilibrium","Redox & Electrochemistry","Solid State","Solutions","Surface Chemistry","d-f Block","Coordination Compounds","Haloalkanes","Alcohols & Ethers","Carbonyl Compounds","Amines","Biomolecules","Polymers","GOC"],
-  Mathematics: ["Sets & Relations","Complex Numbers","Quadratic Equations","Sequences & Series","Permutations","Binomial Theorem","Straight Lines","Circles","Conics","3D Geometry","Vectors","Limits & Continuity","Differentiation","Applications of Derivatives","Integrals","Differential Equations","Matrices & Determinants","Probability"],
-};
-const TASK_TYPES = ["PDF Lecture","Notes","Test Planner"];
-const SUB_COLOR  = { Physics:"#60a5fa", Chemistry:"#34d399", Mathematics:"#fbbf24" };
-const SUB_GLOW   = { Physics:"#60a5fa33", Chemistry:"#34d39933", Mathematics:"#fbbf2433" };
-const SUB_ICON   = { Physics:"⚛️", Chemistry:"🧪", Mathematics:"📐" };
-
-/* ─── helpers ──────────────────────────────────────────────────────────── */
-const pad = n => String(n).padStart(2,"0");
-function msToHMS(ms){
-  if(ms<=0)return"00:00:00";
-  const s=Math.floor(ms/1000);
-  return`${pad(Math.floor(s/3600))}:${pad(Math.floor((s%3600)/60))}:${pad(s%60)}`;
-}
-function getCountdown(target){
-  const diff = target - Date.now();
-  if(diff<=0) return {d:0,h:0,m:0,s:0};
-  return {
-    d: Math.floor(diff/86400000),
-    h: Math.floor((diff%86400000)/3600000),
-    m: Math.floor((diff%3600000)/60000),
-    s: Math.floor((diff%60000)/1000),
-  };
-}
-function todayKey(){ return new Date().toISOString().slice(0,10); }
-function daysSinceStart(){ return Math.max(1,Math.floor((Date.now()-START_DATE)/86400000)+1); }
-
-/* ─── Firestore (optional) ─────────────────────────────────────────────── */
-const FIREBASE_CONFIG = null;
-let db=null;
-async function getDB(){
-  if(db) return db;
-  if(!FIREBASE_CONFIG) return null;
-  try{
-    const{initializeApp}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-    const{getFirestore,doc,setDoc,getDoc}=await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-    const app=initializeApp(FIREBASE_CONFIG);
-    db={fs:getFirestore(app),doc,setDoc,getDoc};
-    return db;
-  }catch{return null;}
-}
-async function cloudSave(key,data){
-  const d=await getDB(); if(!d) return;
-  await d.setDoc(d.doc(d.fs,"jeeOS2027",key),{data:JSON.stringify(data)});
-}
-
-/* ─── AI MCQ ───────────────────────────────────────────────────────────── */
-async function generateMCQ(chapter,subject,qNum){
-  const res=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({
-      model:"claude-sonnet-4-20250514",
-      max_tokens:1000,
-      messages:[{role:"user",content:`Generate 1 JEE Advanced-level MCQ for "${chapter}" (${subject}), question #${qNum}. Return ONLY valid JSON, no markdown:
-{"question":"...","options":["A) ...","B) ...","C) ...","D) ..."],"answer":"A","explanation":"..."}`}],
-    }),
-  });
-  const data=await res.json();
-  const text=data.content?.find(b=>b.type==="text")?.text||"{}";
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
-}
-
-/* ═══════════════════════════════════════════════════════════════════════ */
-/* STYLES                                                                   */
-/* ═══════════════════════════════════════════════════════════════════════ */
-const G = {
-  bg:       "#060612",
-  surface:  "rgba(255,255,255,0.04)",
-  surfaceHover:"rgba(255,255,255,0.07)",
-  border:   "rgba(255,255,255,0.08)",
-  borderBright:"rgba(255,255,255,0.15)",
-  text:     "#f1f5f9",
-  muted:    "#64748b",
-  accent:   "#818cf8",       // indigo
-  accentGlow:"#818cf822",
-  green:    "#34d399",
-  amber:    "#fbbf24",
-  red:      "#f87171",
-  blue:     "#60a5fa",
-  font:     "'Outfit', sans-serif",
-  mono:     "'JetBrains Mono', monospace",
-};
-
-const glassCard = {
-  background: G.surface,
-  backdropFilter: "blur(16px)",
-  WebkitBackdropFilter: "blur(16px)",
-  border: `1px solid ${G.border}`,
-  borderRadius: 20,
-  padding: 20,
-};
-
-/* ═══════════════════════════════════════════════════════════════════════ */
-export default function App(){
-  const [tab, setTab] = useState("home");
-  const [tasks, setTasks] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_tasks")||"{}")}catch{return{}} });
-  const [weights, setWeights] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_weights")||"[]")}catch{return[]} });
-  const [sessions, setSessions] = useState(()=>{ try{return JSON.parse(localStorage.getItem("jee27_sessions")||"[]")}catch{return[]} });
-  const [focusMode, setFocusMode] = useState(false);
-  const [focusTimer, setFocusTimer] = useState({running:false,elapsed:0,start:null});
-  const [pState, setPState] = useState({active:false,subject:"Physics",chapter:"",qNums:"",questions:[],current:0,selected:{},score:null,loading:false});
-  const [newW, setNewW] = useState({label:"",value:""});
-  const [ticker, setTicker] = useState(0);
-  const focusRef = useRef(null);
-
-  useEffect(()=>{ const t=setInterval(()=>setTicker(x=>x+1),1000); return()=>clearInterval(t); },[]);
-  useEffect(()=>{ localStorage.setItem("jee27_tasks",JSON.stringify(tasks)); },[tasks]);
-  useEffect(()=>{ localStorage.setItem("jee27_weights",JSON.stringify(weights)); },[weights]);
-  useEffect(()=>{ localStorage.setItem("jee27_sessions",JSON.stringify(sessions)); },[sessions]);
-  useEffect(()=>{
-    if(focusTimer.running){ focusRef.current=setInterval(()=>setFocusTimer(f=>({...f,elapsed:Date.now()-f.start})),1000); }
-    else clearInterval(focusRef.current);
-    return()=>clearInterval(focusRef.current);
-  },[focusTimer.running]);
-
-  function toggleTask(sub,ch,type){
-    const key=`${sub}__${ch}__${type}`;
-    const next={...tasks,[key]:!tasks[key]};
-    setTasks(next); cloudSave("tasks",next);
-  }
-  function startFocus(){
-    setFocusMode(true);
-    setFocusTimer({running:true,elapsed:0,start:Date.now()});
-    document.documentElement.requestFullscreen?.();
-  }
-  function stopFocus(){
-    setFocusMode(false);
-    const secs=Math.floor(focusTimer.elapsed/1000);
-    if(secs>30){ const next=[...sessions,{date:todayKey(),secs}]; setSessions(next); cloudSave("sessions",next); }
-    setFocusTimer({running:false,elapsed:0,start:null});
-    document.exitFullscreen?.();
-  }
-  async function startPractice(){
-    const{subject,chapter,qNums}=pState;
-    if(!chapter||!qNums.trim()) return;
-    const nums=qNums.split(",").map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)).slice(0,10);
-    if(!nums.length) return;
-    setPState(p=>({...p,loading:true,questions:[],current:0,selected:{},score:null}));
-    try{
-      const qs=[];
-      for(const n of nums){ const q=await generateMCQ(chapter,subject,n); qs.push({...q,qNum:n}); }
-      setPState(p=>({...p,active:true,loading:false,questions:qs}));
-    }catch{ setPState(p=>({...p,loading:false})); alert("AI error"); }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JEE 2027 — Study Command Center</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3e;
+    --accent: #7c6af7;
+    --accent2: #f7a26a;
+    --accent3: #6af7c8;
+    --accent4: #f76a8a;
+    --text: #e8e8f0;
+    --text2: #8888aa;
+    --text3: #4a4a66;
+    --phy: #6af7c8;
+    --math: #7c6af7;
+    --pc: #f7a26a;
+    --ic: #f76a8a;
+    --oc: #f7e26a;
+    --radius: 12px;
+    --shadow: 0 4px 24px rgba(0,0,0,0.4);
   }
 
-  const main27  = getCountdown(JEE_MAIN_2027);
-  const adv27   = getCountdown(JEE_ADV_2027);
-  const today   = todayKey();
-  const todaySecs = sessions.filter(s=>s.date===today).reduce((a,b)=>a+b.secs,0);
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* ── FOCUS OVERLAY ─────────────────────────────────────────────────── */
-  if(focusMode) return(
-    <div style={{position:"fixed",inset:0,background:"#020208",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:G.font,zIndex:9999}}>
-      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse at center, #1e1b4b 0%, #020208 70%)",opacity:.6}}/>
-      <div style={{position:"relative",textAlign:"center"}}>
-        <div style={{fontSize:11,letterSpacing:5,color:G.green,marginBottom:20,textTransform:"uppercase"}}>● Focus Mode Active</div>
-        <div style={{fontSize:88,fontWeight:800,color:"#fff",fontFamily:G.mono,lineHeight:1,textShadow:"0 0 60px #818cf866"}}>{msToHMS(focusTimer.elapsed)}</div>
-        <div style={{fontSize:13,color:G.muted,marginTop:12}}>Stay locked in. No distractions.</div>
-        <button onClick={stopFocus} style={{marginTop:48,padding:"12px 48px",background:"transparent",border:`1px solid ${G.red}`,color:G.red,borderRadius:50,cursor:"pointer",fontSize:14,fontFamily:G.font,fontWeight:600,letterSpacing:1}}>END SESSION</button>
-      </div>
-    </div>
-  );
-
-  const TABS=[
-    {id:"home",   icon:"🏠", label:"Home"},
-    {id:"tasks",  icon:"✅", label:"Tasks"},
-    {id:"practice",icon:"⚡",label:"Practice"},
-    {id:"focus",  icon:"🎯", label:"Focus"},
-    {id:"stats",  icon:"📊", label:"Stats"},
-    {id:"weight", icon:"📝", label:"Notes"},
-  ];
-
-  return(
-    <div style={{minHeight:"100vh",background:G.bg,fontFamily:G.font,color:G.text,display:"flex",flexDirection:"column",maxWidth:430,margin:"0 auto",position:"relative",overflow:"hidden"}}>
-
-      {/* Deep space background */}
-      <div style={{position:"fixed",inset:0,maxWidth:430,margin:"0 auto",pointerEvents:"none",zIndex:0}}>
-        <div style={{position:"absolute",top:-120,left:-80,width:400,height:400,background:"radial-gradient(circle,#4338ca22 0%,transparent 70%)",borderRadius:"50%"}}/>
-        <div style={{position:"absolute",top:200,right:-100,width:300,height:300,background:"radial-gradient(circle,#0ea5e922 0%,transparent 70%)",borderRadius:"50%"}}/>
-        <div style={{position:"absolute",bottom:100,left:20,width:250,height:250,background:"radial-gradient(circle,#7c3aed11 0%,transparent 70%)",borderRadius:"50%"}}/>
-        {/* stars */}
-        {[...Array(30)].map((_,i)=>(
-          <div key={i} style={{position:"absolute",width:1.5,height:1.5,background:"#fff",borderRadius:"50%",opacity:Math.random()*0.5+0.1,left:`${Math.random()*100}%`,top:`${Math.random()*100}%`}}/>
-        ))}
-      </div>
-
-      {/* Top Header */}
-      <div style={{position:"relative",zIndex:10,padding:"16px 20px 12px",borderBottom:`1px solid ${G.border}`,background:"rgba(6,6,18,0.8)",backdropFilter:"blur(20px)"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontSize:22,fontWeight:800,background:"linear-gradient(135deg,#818cf8,#60a5fa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",letterSpacing:-0.5}}>JEE OS 2027</div>
-            <div style={{fontSize:11,color:G.muted,marginTop:1}}>Day {daysSinceStart()} · {new Date().toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"})}</div>
-          </div>
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:11,color:G.green,fontWeight:600}}>MAIN {main27.d}d</div>
-            <div style={{fontSize:11,color:G.amber,fontWeight:600}}>ADV {adv27.d}d</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div style={{flex:1,overflowY:"auto",padding:"16px 16px 88px",position:"relative",zIndex:5}}>
-        {tab==="home"     && <HomeTab main27={main27} adv27={adv27} tasks={tasks} sessions={sessions} todaySecs={todaySecs}/>}
-        {tab==="tasks"    && <TasksTab tasks={tasks} toggleTask={toggleTask}/>}
-        {tab==="practice" && <PracticeTab state={pState} setState={setPState} onStart={startPractice}/>}
-        {tab==="focus"    && <FocusTab onStart={startFocus} sessions={sessions} todaySecs={todaySecs}/>}
-        {tab==="stats"    && <StatsTab sessions={sessions} tasks={tasks}/>}
-        {tab==="weight"   && <WeightTab weights={weights} setWeights={setWeights} newW={newW} setNewW={setNewW} cloudSave={cloudSave}/>}
-      </div>
-
-      {/* Bottom Nav */}
-      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"rgba(6,6,18,0.92)",backdropFilter:"blur(24px)",borderTop:`1px solid ${G.border}`,display:"flex",zIndex:20}}>
-        {TABS.map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 0 8px",background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,color:tab===t.id?G.accent:G.muted,transition:"color .2s",borderTop:tab===t.id?`2px solid ${G.accent}`:"2px solid transparent"}}>
-            <span style={{fontSize:18}}>{t.icon}</span>
-            <span style={{fontSize:9,fontWeight:600,letterSpacing:.5}}>{t.label}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ══ HOME ══════════════════════════════════════════════════════════════════ */
-function HomeTab({main27,adv27,tasks,sessions,todaySecs}){
-  const totalTasks = Object.keys(DP_CHAPTERS).flatMap(s=>DP_CHAPTERS[s].flatMap(c=>TASK_TYPES)).length;
-  const doneTasks  = Object.values(tasks).filter(Boolean).length;
-  const pct        = Math.round((doneTasks/totalTasks)*100);
-  const totalSecs  = sessions.reduce((a,b)=>a+b.secs,0);
-
-  return(
-    <div style={{display:"flex",flexDirection:"column",gap:14}}>
-
-      {/* Target Banner */}
-      <div style={{background:"linear-gradient(135deg,#4338ca,#7c3aed,#2563eb)",borderRadius:20,padding:"20px 22px",position:"relative",overflow:"hidden"}}>
-        <div style={{position:"absolute",top:-20,right:-20,width:120,height:120,background:"rgba(255,255,255,0.05)",borderRadius:"50%"}}/>
-        <div style={{position:"absolute",bottom:-30,left:40,width:80,height:80,background:"rgba(255,255,255,0.04)",borderRadius:"50%"}}/>
-        <div style={{fontSize:11,color:"rgba(255,255,255,0.6)",letterSpacing:3,marginBottom:6,textTransform:"uppercase"}}>🎯 Target</div>
-        <div style={{fontSize:26,fontWeight:800,color:"#fff",letterSpacing:-0.5}}>IIT Bombay / Delhi</div>
-        <div style={{fontSize:13,color:"rgba(255,255,255,0.65)",marginTop:4}}>Har din ek kadam aur karib 🚀</div>
-      </div>
-
-      {/* Countdown Cards */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <CountdownCard title="JEE MAIN 2027" date="27 Apr 2027" cd={main27} color="#60a5fa"/>
-        <CountdownCard title="JEE ADV 2027"  date="~Jun 2027"   cd={adv27}  color="#fbbf24"/>
-      </div>
-
-      {/* Overall Progress */}
-      <GCard>
-        <Row><ColLabel>Overall Progress</ColLabel><span style={{fontSize:13,fontWeight:700,color:G.accent}}>{pct}%</span></Row>
-        <ArcProgress value={pct} color={G.accent}/>
-        <div style={{fontSize:11,color:G.muted,textAlign:"center",marginTop:8}}>{doneTasks} / {totalTasks} tasks completed</div>
-        <SubjectMiniProgress tasks={tasks}/>
-      </GCard>
-
-      {/* Today stats */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        <GCard style={{textAlign:"center"}}>
-          <ColLabel>Today</ColLabel>
-          <div style={{fontSize:22,fontWeight:800,color:G.green,fontFamily:G.mono}}>{msToHMS(todaySecs*1000)}</div>
-          <div style={{fontSize:10,color:G.muted}}>study time</div>
-        </GCard>
-        <GCard style={{textAlign:"center"}}>
-          <ColLabel>All-time</ColLabel>
-          <div style={{fontSize:22,fontWeight:800,color:G.blue,fontFamily:G.mono}}>{msToHMS(totalSecs*1000)}</div>
-          <div style={{fontSize:10,color:G.muted}}>total hours</div>
-        </GCard>
-      </div>
-
-      {/* Day counter */}
-      <GCard style={{display:"flex",alignItems:"center",gap:14}}>
-        <div style={{width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#4338ca,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>📅</div>
-        <div>
-          <div style={{fontSize:12,color:G.muted}}>Preparation started · 1 Jun 2025</div>
-          <div style={{fontSize:18,fontWeight:700,color:G.text}}>Day {daysSinceStart()} of your journey</div>
-        </div>
-      </GCard>
-    </div>
-  );
-}
-
-function CountdownCard({title,date,cd,color}){
-  return(
-    <div style={{...glassCard,padding:14,border:`1px solid ${color}33`}}>
-      <div style={{fontSize:9,color:color,fontWeight:700,letterSpacing:2,marginBottom:10,textTransform:"uppercase"}}>{title}</div>
-      <div style={{display:"flex",gap:6,marginBottom:8}}>
-        {[["D",cd.d],["H",cd.h],["M",cd.m],["S",cd.s]].map(([l,v])=>(
-          <div key={l} style={{flex:1,background:"rgba(255,255,255,0.06)",borderRadius:8,padding:"6px 0",textAlign:"center"}}>
-            <div style={{fontSize:20,fontWeight:800,color,fontFamily:G.mono,lineHeight:1}}>{pad(v)}</div>
-            <div style={{fontSize:8,color:G.muted,marginTop:2}}>{l}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{fontSize:10,color:G.muted,textAlign:"center"}}>📅 {date}</div>
-    </div>
-  );
-}
-
-function ArcProgress({value,color}){
-  const r=52, cx=64, cy=64, circ=2*Math.PI*r;
-  const offset=circ*(1-value/100);
-  return(
-    <div style={{display:"flex",justifyContent:"center",margin:"8px 0 0"}}>
-      <svg width={128} height={80} viewBox="0 0 128 100">
-        <path d={`M${cx-r},${cy} A${r},${r} 0 0,1 ${cx+r},${cy}`} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={10} strokeLinecap="round"/>
-        <path d={`M${cx-r},${cy} A${r},${r} 0 0,1 ${cx+r},${cy}`} fill="none" stroke={color} strokeWidth={10} strokeLinecap="round"
-          strokeDasharray={`${circ/2}`} strokeDashoffset={`${offset/2}`} style={{transition:"stroke-dashoffset .6s ease"}}/>
-        <text x={cx} y={cy-4} textAnchor="middle" fontSize={22} fontWeight={800} fill={color} fontFamily={G.font}>{value}%</text>
-      </svg>
-    </div>
-  );
-}
-
-function SubjectMiniProgress({tasks}){
-  return(
-    <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:4}}>
-      {Object.keys(DP_CHAPTERS).map(sub=>{
-        const chs=DP_CHAPTERS[sub];
-        const total=chs.length*TASK_TYPES.length;
-        const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
-        const pct=Math.round((done/total)*100);
-        return(
-          <div key={sub}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-              <span style={{fontSize:11,color:SUB_COLOR[sub]}}>{SUB_ICON[sub]} {sub}</span>
-              <span style={{fontSize:11,color:G.muted}}>{pct}%</span>
-            </div>
-            <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,overflow:"hidden"}}>
-              <div style={{height:"100%",width:`${pct}%`,background:SUB_COLOR[sub],borderRadius:2,transition:"width .4s"}}/>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ══ TASKS ══════════════════════════════════════════════════════════════════ */
-function TasksTab({tasks,toggleTask}){
-  const [openSub,setOpenSub]=useState("Physics");
-
-  function subPct(sub){
-    const chs=DP_CHAPTERS[sub];
-    const total=chs.length*TASK_TYPES.length;
-    const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
-    return Math.round((done/total)*100);
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
   }
 
-  return(
-    <div>
-      {/* Subject tabs */}
-      <div style={{display:"flex",gap:8,marginBottom:16}}>
-        {Object.keys(DP_CHAPTERS).map(s=>{
-          const active=openSub===s;
-          return(
-            <button key={s} onClick={()=>setOpenSub(s)} style={{flex:1,padding:"10px 4px",background:active?SUB_GLOW[s]:"rgba(255,255,255,0.03)",border:`1px solid ${active?SUB_COLOR[s]+"66":G.border}`,borderRadius:12,color:active?SUB_COLOR[s]:G.muted,cursor:"pointer",fontFamily:G.font,fontWeight:600,transition:"all .2s"}}>
-              <div style={{fontSize:18}}>{SUB_ICON[s]}</div>
-              <div style={{fontSize:10,marginTop:2}}>{s.slice(0,4)}</div>
-              <div style={{fontSize:10,marginTop:1,color:active?SUB_COLOR[s]:G.muted}}>{subPct(s)}%</div>
-            </button>
-          );
-        })}
-      </div>
+  /* GRID NOISE BACKGROUND */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(124,106,247,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,106,247,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
 
-      <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        {DP_CHAPTERS[openSub].map((ch,i)=>{
-          const done=TASK_TYPES.filter(t=>tasks[`${openSub}__${ch}__${t}`]).length;
-          const allDone=done===TASK_TYPES.length;
-          return(
-            <div key={ch} style={{...glassCard,padding:"14px 16px",border:`1px solid ${allDone?SUB_COLOR[openSub]+"44":G.border}`,transition:"border .2s"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{width:24,height:24,borderRadius:6,background:SUB_GLOW[openSub],display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:SUB_COLOR[openSub],fontWeight:700}}>{i+1}</div>
-                  <span style={{fontSize:13,fontWeight:600,color:allDone?SUB_COLOR[openSub]:G.text}}>{ch}</span>
-                </div>
-                <span style={{fontSize:10,color:done===TASK_TYPES.length?G.green:G.muted}}>{done}/{TASK_TYPES.length}</span>
-              </div>
-              <div style={{display:"flex",gap:8}}>
-                {TASK_TYPES.map(type=>{
-                  const key=`${openSub}__${ch}__${type}`;
-                  const checked=!!tasks[key];
-                  const icons={"PDF Lecture":"📄","Notes":"📝","Test Planner":"🗓️"};
-                  return(
-                    <button key={type} onClick={()=>toggleTask(openSub,ch,type)} style={{flex:1,padding:"8px 4px",borderRadius:10,background:checked?SUB_GLOW[openSub]:"rgba(255,255,255,0.03)",border:`1px solid ${checked?SUB_COLOR[openSub]+"66":G.border}`,color:checked?SUB_COLOR[openSub]:G.muted,cursor:"pointer",fontFamily:G.font,fontSize:10,fontWeight:600,transition:"all .15s",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                      <span style={{fontSize:16}}>{checked?"✅":icons[type]}</span>
-                      <span style={{fontSize:9,lineHeight:1.2,textAlign:"center"}}>{type}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
+  .app {
+    position: relative;
+    z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 0 80px;
+  }
+
+  /* HEADER */
+  .header {
+    padding: 24px 20px 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .header-left h1 {
+    font-size: clamp(1.4rem, 4vw, 2rem);
+    font-weight: 900;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.1;
+  }
+
+  .header-left .subtitle {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    color: var(--text2);
+    margin-top: 4px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .countdown-chip {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 6px 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--accent2);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* NAV TABS */
+  .nav {
+    display: flex;
+    gap: 4px;
+    padding: 20px 20px 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+
+  .nav-btn {
+    flex-shrink: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 8px 18px;
+    color: var(--text2);
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .nav-btn:hover { color: var(--text); border-color: var(--accent); }
+  .nav-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+    font-weight: 600;
+  }
+
+  /* SECTIONS */
+  .section { display: none; padding: 20px; }
+  .section.active { display: block; }
+
+  /* DASHBOARD */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  @media (min-width: 600px) {
+    .stats-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--card-color, var(--accent));
+  }
+
+  .stat-card .stat-label {
+    font-size: 0.7rem;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .stat-card .stat-val {
+    font-size: 2rem;
+    font-weight: 900;
+    color: var(--card-color, var(--accent));
+    line-height: 1;
+    margin: 6px 0 2px;
+  }
+
+  .stat-card .stat-sub {
+    font-size: 0.72rem;
+    color: var(--text3);
+  }
+
+  /* SUBJECT PROGRESS */
+  .subject-grid {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .subject-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+
+  .subject-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .subject-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  .subject-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--s-color);
+    flex-shrink: 0;
+    box-shadow: 0 0 6px var(--s-color);
+  }
+
+  .subject-count {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text2);
+  }
+
+  .progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 100px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    border-radius: 100px;
+    background: var(--s-color);
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 0 8px var(--s-color);
+  }
+
+  /* TRACKER */
+  .tracker-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+
+  .filter-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    padding: 6px 14px;
+    color: var(--text2);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'Outfit', sans-serif;
+  }
+
+  .filter-btn:hover, .filter-btn.active {
+    color: white;
+    border-color: currentColor;
+  }
+
+  .filter-btn[data-subject="phy"].active { color: var(--phy); }
+  .filter-btn[data-subject="math"].active { color: var(--math); }
+  .filter-btn[data-subject="pc"].active { color: var(--pc); }
+  .filter-btn[data-subject="ic"].active { color: var(--ic); }
+  .filter-btn[data-subject="oc"].active { color: var(--oc); }
+  .filter-btn[data-subject="all"].active { color: var(--accent); }
+
+  .lecture-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 60vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  .lecture-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+
+  .lecture-item:hover { border-color: var(--accent); background: var(--surface2); }
+
+  .lecture-item.done {
+    opacity: 0.5;
+    border-color: transparent;
+  }
+
+  .lecture-item.done .lec-title { text-decoration: line-through; }
+
+  .lec-check {
+    width: 20px; height: 20px;
+    border-radius: 6px;
+    border: 2px solid var(--l-color, var(--border));
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    font-size: 0.7rem;
+  }
+
+  .lecture-item.done .lec-check {
+    background: var(--l-color, var(--accent));
+    border-color: var(--l-color, var(--accent));
+    color: #000;
+  }
+
+  .lec-info { flex: 1; min-width: 0; }
+  .lec-title { font-size: 0.88rem; font-weight: 500; }
+  .lec-meta { font-size: 0.7rem; color: var(--text2); margin-top: 2px; font-family: 'Space Mono', monospace; }
+
+  .lec-subject-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 100px;
+    background: rgba(255,255,255,0.05);
+    color: var(--l-color);
+    flex-shrink: 0;
+  }
+
+  /* ADD LECTURE */
+  .add-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .add-form.open { display: block; }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  @media (max-width: 480px) { .form-row { grid-template-columns: 1fr; } }
+
+  .form-input, .form-select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.88rem;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .form-input:focus, .form-select:focus { border-color: var(--accent); }
+  .form-input::placeholder { color: var(--text3); }
+  .form-select option { background: var(--surface2); }
+
+  /* REVISION SCHEDULER */
+  .revision-intro {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+    font-size: 0.85rem;
+    color: var(--text2);
+    line-height: 1.6;
+  }
+
+  .revision-intro strong { color: var(--accent3); }
+
+  .add-topic-form {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+
+  .add-topic-form h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text2);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .due-section { margin-bottom: 20px; }
+
+  .due-section h3 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-family: 'Space Mono', monospace;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .due-badge {
+    background: var(--accent4);
+    color: white;
+    font-size: 0.65rem;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-weight: 700;
+  }
+
+  .topic-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .topic-card.overdue { border-color: rgba(247,106,138,0.4); }
+  .topic-card.due-today { border-color: rgba(247,162,106,0.4); }
+  .topic-card.upcoming { opacity: 0.7; }
+
+  .topic-info { flex: 1; min-width: 0; }
+  .topic-name { font-size: 0.9rem; font-weight: 600; }
+  .topic-due { font-size: 0.72rem; font-family: 'Space Mono', monospace; margin-top: 3px; }
+  .topic-due.overdue { color: var(--accent4); }
+  .topic-due.today { color: var(--accent2); }
+  .topic-due.upcoming { color: var(--text2); }
+
+  .topic-stage {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .stage-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--border);
+    transition: background 0.2s;
+  }
+  .stage-dot.filled { background: var(--accent3); box-shadow: 0 0 4px var(--accent3); }
+
+  .revise-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    padding: 7px 14px;
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'Outfit', sans-serif;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .revise-btn:hover { transform: scale(1.04); background: #6a58e0; }
+  .revise-btn.done { background: var(--surface2); color: var(--text3); cursor: not-allowed; }
+
+  /* TESTS SECTION */
+  .test-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+
+  .test-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .test-card.completed { opacity: 0.7; }
+
+  .test-num {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text3);
+    margin-bottom: 6px;
+  }
+
+  .test-name {
+    font-weight: 600;
+    font-size: 0.92rem;
+    margin-bottom: 8px;
+  }
+
+  .test-score-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.85rem;
+    width: 100%;
+    outline: none;
+    font-weight: 700;
+  }
+
+  .test-score-input:focus { border-color: var(--accent); }
+  .test-score-input::placeholder { color: var(--text3); font-weight: 400; }
+
+  .test-date {
+    font-size: 0.7rem;
+    color: var(--text2);
+    margin-top: 6px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* BUTTONS */
+  .btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    color: white;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: 'Outfit', sans-serif;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn:hover { transform: scale(1.03); }
+  .btn.secondary {
+    background: var(--surface2);
+    color: var(--text2);
+    border: 1px solid var(--border);
+  }
+  .btn.danger { background: var(--accent4); }
+  .btn.small { padding: 6px 12px; font-size: 0.78rem; }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  /* SECTION HEADER */
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .section-title {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  /* EMPTY STATE */
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text3);
+    font-size: 0.88rem;
+  }
+
+  .empty-state .icon { font-size: 2.5rem; margin-bottom: 8px; }
+
+  /* TOAST */
+  .toast {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    border-radius: 100px;
+    padding: 10px 20px;
+    font-size: 0.85rem;
+    color: var(--text);
+    opacity: 0;
+    transition: all 0.3s;
+    pointer-events: none;
+    z-index: 999;
+    white-space: nowrap;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* BOTTOM NAV */
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(10,10,15,0.95);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+    display: flex;
+    padding: 8px 4px 12px;
+    z-index: 100;
+  }
+
+  .bnav-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    color: var(--text3);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    font-family: 'Outfit', sans-serif;
+    transition: color 0.2s;
+  }
+
+  .bnav-btn.active { color: var(--accent); }
+  .bnav-btn .icon { font-size: 1.3rem; }
+  .bnav-btn .label { font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left">
+      <h1>JEE 2027<br>Command Center</h1>
+      <div class="subtitle">Prayas 2.0 · Dropper Mode</div>
+    </div>
+    <div class="countdown-chip" id="countdown">Loading...</div>
+  </div>
+
+  <!-- NAV TABS -->
+  <div class="nav">
+    <button class="nav-btn active" onclick="showSection('dashboard')">📊 Dashboard</button>
+    <button class="nav-btn" onclick="showSection('tracker')">📚 Lectures</button>
+    <button class="nav-btn" onclick="showSection('revision')">🔁 Revision</button>
+    <button class="nav-btn" onclick="showSection('tests')">📝 Tests</button>
+  </div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div class="section active" id="sec-dashboard">
+    <div class="stats-grid">
+      <div class="stat-card" style="--card-color: var(--accent)">
+        <div class="stat-label">Done Today</div>
+        <div class="stat-val" id="stat-today">0</div>
+        <div class="stat-sub">lectures</div>
+      </div>
+      <div class="stat-card" style="--card-color: var(--accent3)">
+        <div class="stat-label">Total Done</div>
+        <div class="stat-val" id="stat-total">0</div>
+        <div class="stat-sub">of <span id="stat-total-all">0</span></div>
+      </div>
+      <div class="stat-card" style="--card-color: var(--accent2)">
+        <div class="stat-label">Due Revisions</div>
+        <div class="stat-val" id="stat-revisions">0</div>
+        <div class="stat-sub">topics pending</div>
+      </div>
+      <div class="stat-card" style="--card-color: var(--accent4)">
+        <div class="stat-label">Tests Done</div>
+        <div class="stat-val" id="stat-tests">0</div>
+        <div class="stat-sub">of 33 total</div>
       </div>
     </div>
-  );
-}
 
-/* ══ PRACTICE ═══════════════════════════════════════════════════════════════ */
-function PracticeTab({state,setState,onStart}){
-  const{active,subject,chapter,qNums,questions,current,selected,score,loading}=state;
+    <div class="subject-grid" id="subject-progress"></div>
 
-  if(loading) return(
-    <div style={{textAlign:"center",paddingTop:100}}>
-      <div style={{fontSize:48,marginBottom:20}}>⚡</div>
-      <div style={{fontSize:16,fontWeight:700,color:G.accent}}>Generating Questions...</div>
-      <div style={{fontSize:12,color:G.muted,marginTop:8}}>AI crafting JEE Advanced-level MCQs</div>
-      <div style={{marginTop:24,display:"flex",justifyContent:"center",gap:6}}>
-        {[0,1,2].map(i=><div key={i} style={{width:8,height:8,borderRadius:"50%",background:G.accent,animation:`pulse 1.2s ${i*0.2}s infinite alternate`,opacity:0.4}}/>)}
-      </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-top:4px;">
+      <div style="font-size:0.75rem;color:var(--text2);font-family:'Space Mono',monospace;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Today's Due Revisions</div>
+      <div id="dash-due-revisions"></div>
     </div>
-  );
+  </div>
 
-  if(!active) return(
-    <div>
-      <STitle>⚡ Self Practice</STitle>
-      <GCard>
-        <ColLabel>Select Subject</ColLabel>
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
-          {Object.keys(DP_CHAPTERS).map(s=>{
-            const sel=subject===s;
-            return<button key={s} onClick={()=>setState(p=>({...p,subject:s,chapter:""}))} style={{flex:1,padding:"10px 4px",background:sel?SUB_GLOW[s]:"rgba(255,255,255,0.03)",border:`1px solid ${sel?SUB_COLOR[s]+"66":G.border}`,borderRadius:12,color:sel?SUB_COLOR[s]:G.muted,cursor:"pointer",fontFamily:G.font,fontWeight:600,fontSize:11}}>
-              {SUB_ICON[s]}<br/>{s.slice(0,4)}
-            </button>;
-          })}
-        </div>
-        <ColLabel>Chapter</ColLabel>
-        <select value={chapter} onChange={e=>setState(p=>({...p,chapter:e.target.value}))} style={selStyle}>
-          <option value="">-- Select Chapter --</option>
-          {DP_CHAPTERS[subject].map(ch=><option key={ch}>{ch}</option>)}
+  <!-- ============ TRACKER ============ -->
+  <div class="section" id="sec-tracker">
+    <div class="section-header">
+      <div class="section-title">Lecture Tracker</div>
+      <button class="btn small" onclick="toggleAddForm()">+ Add Lecture</button>
+    </div>
+
+    <div class="add-form" id="add-form">
+      <div class="form-row">
+        <input class="form-input" id="lec-title" placeholder="Lecture title / topic...">
+        <select class="form-select" id="lec-subject">
+          <option value="phy">Physics</option>
+          <option value="math">Mathematics</option>
+          <option value="pc">Physical Chemistry</option>
+          <option value="ic">Inorganic Chemistry</option>
+          <option value="oc">Organic Chemistry</option>
         </select>
-        <ColLabel style={{marginTop:14}}>Question Numbers (comma-separated, max 10)</ColLabel>
-        <input value={qNums} onChange={e=>setState(p=>({...p,qNums:e.target.value}))} placeholder="e.g. 1, 5, 12, 23" style={inpStyle}/>
-        <div style={{fontSize:11,color:G.muted,margin:"10px 0 14px"}}>AI will generate a unique JEE-level MCQ for each number</div>
-        <BigBtn color={G.accent} onClick={onStart} disabled={!chapter||!qNums.trim()}>Generate & Start ⚡</BigBtn>
-      </GCard>
+      </div>
+      <div class="form-row">
+        <input class="form-input" id="lec-chapter" placeholder="Chapter name...">
+        <input class="form-input" id="lec-num" placeholder="Lecture # (e.g. L12)">
+      </div>
+      <div class="btn-row">
+        <button class="btn small" onclick="addLecture()">Add</button>
+        <button class="btn small secondary" onclick="toggleAddForm()">Cancel</button>
+      </div>
     </div>
-  );
 
-  if(score!==null){
-    const total=questions.length;
-    const pct=Math.round((score/total)*100);
-    const jeeScore=score*4-(total-score);
-    return(
-      <div>
-        <STitle>📊 Results</STitle>
-        <div style={{...glassCard,textAlign:"center",marginBottom:14,border:`1px solid ${pct>=60?G.green+"44":G.red+"44"}`}}>
-          <div style={{fontSize:56,fontWeight:900,color:pct>=60?G.green:G.red}}>{pct}%</div>
-          <div style={{fontSize:14,color:G.text,marginBottom:4}}>{score} / {total} Correct</div>
-          <div style={{fontSize:12,color:G.muted}}>JEE Score: <span style={{color:jeeScore>=0?G.green:G.red,fontWeight:700}}>+{score*4} – {total-score} = {jeeScore}</span></div>
+    <div class="tracker-controls">
+      <button class="filter-btn active" data-subject="all" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" data-subject="phy" onclick="setFilter('phy',this)">Physics</button>
+      <button class="filter-btn" data-subject="math" onclick="setFilter('math',this)">Maths</button>
+      <button class="filter-btn" data-subject="pc" onclick="setFilter('pc',this)">Phys Chem</button>
+      <button class="filter-btn" data-subject="ic" onclick="setFilter('ic',this)">Inorg Chem</button>
+      <button class="filter-btn" data-subject="oc" onclick="setFilter('oc',this)">Org Chem</button>
+    </div>
+
+    <div class="lecture-list" id="lecture-list"></div>
+  </div>
+
+  <!-- ============ REVISION ============ -->
+  <div class="section" id="sec-revision">
+    <div class="revision-intro">
+      Spaced Repetition: topic revise karo <strong>Day 1 → Day 3 → Day 7 → Day 14</strong> ke intervals pe. Har stage complete hone pe next revision auto-schedule hoti hai.
+    </div>
+
+    <div class="add-topic-form">
+      <h3>Add Topic for Revision</h3>
+      <div class="form-row">
+        <input class="form-input" id="topic-name" placeholder="Topic name (e.g. Kinematics)">
+        <select class="form-select" id="topic-subject">
+          <option value="phy">Physics</option>
+          <option value="math">Mathematics</option>
+          <option value="pc">Physical Chemistry</option>
+          <option value="ic">Inorganic Chemistry</option>
+          <option value="oc">Organic Chemistry</option>
+        </select>
+      </div>
+      <button class="btn small" onclick="addTopic()">Add Topic</button>
+    </div>
+
+    <div class="due-section">
+      <h3 style="color:var(--accent4)">⚠️ Overdue <span class="due-badge" id="overdue-count">0</span></h3>
+      <div id="overdue-list"></div>
+    </div>
+
+    <div class="due-section">
+      <h3 style="color:var(--accent2)">📅 Due Today <span class="due-badge" id="today-count" style="background:var(--accent2)">0</span></h3>
+      <div id="today-list"></div>
+    </div>
+
+    <div class="due-section">
+      <h3 style="color:var(--text2)">🗓️ Upcoming</h3>
+      <div id="upcoming-list"></div>
+    </div>
+  </div>
+
+  <!-- ============ TESTS ============ -->
+  <div class="section" id="sec-tests">
+    <div class="section-header">
+      <div class="section-title">Test Schedule (33 Tests)</div>
+      <div style="font-size:0.75rem;color:var(--text2)">Scores save honge</div>
+    </div>
+    <div class="test-grid" id="test-grid"></div>
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<div class="bottom-nav">
+  <button class="bnav-btn active" onclick="showSection('dashboard')"><span class="icon">📊</span><span class="label">Home</span></button>
+  <button class="bnav-btn" onclick="showSection('tracker')"><span class="icon">📚</span><span class="label">Lectures</span></button>
+  <button class="bnav-btn" onclick="showSection('revision')"><span class="icon">🔁</span><span class="label">Revision</span></button>
+  <button class="bnav-btn" onclick="showSection('tests')"><span class="icon">📝</span><span class="label">Tests</span></button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============ CONFIG ============
+const SUBJECTS = {
+  phy:  { label: 'Physics',             color: '#6af7c8' },
+  math: { label: 'Mathematics',         color: '#7c6af7' },
+  pc:   { label: 'Physical Chemistry',  color: '#f7a26a' },
+  ic:   { label: 'Inorganic Chemistry', color: '#f76a8a' },
+  oc:   { label: 'Organic Chemistry',   color: '#f7e26a' },
+};
+
+const INTERVALS = [1, 3, 7, 14]; // spaced rep days
+
+const TESTS = [
+  'Part Test 1','Part Test 2','Part Test 3','Part Test 4','Part Test 5',
+  'Part Test 6','Part Test 7','Part Test 8','Part Test 9','Part Test 10',
+  'Part Test 11','Part Test 12','Part Test 13','Part Test 14','Part Test 15',
+  'Part Test 16','Part Test 17','Part Test 18','Part Test 19','Part Test 20',
+  'Major Test 1','Major Test 2','Major Test 3','Major Test 4','Major Test 5',
+  'Major Test 6','Major Test 7','Major Test 8','Major Test 9','Major Test 10',
+  'Major Test 11','Grand Test 1','Grand Test 2'
+];
+
+// ============ STATE ============
+let lectures = JSON.parse(localStorage.getItem('jee_lectures') || '[]');
+let topics   = JSON.parse(localStorage.getItem('jee_topics')   || '[]');
+let scores   = JSON.parse(localStorage.getItem('jee_scores')   || '{}');
+let filter   = 'all';
+
+function save() {
+  localStorage.setItem('jee_lectures', JSON.stringify(lectures));
+  localStorage.setItem('jee_topics',   JSON.stringify(topics));
+  localStorage.setItem('jee_scores',   JSON.stringify(scores));
+}
+
+// ============ UTILS ============
+function today() {
+  return new Date().toISOString().split('T')[0];
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+function diffDays(dateStr) {
+  const t = new Date(today());
+  const d = new Date(dateStr);
+  return Math.round((d - t) / 86400000);
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+}
+
+// ============ NAV ============
+function showSection(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.bnav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('sec-' + id).classList.add('active');
+  const navBtns = document.querySelectorAll('.nav-btn');
+  const map = ['dashboard','tracker','revision','tests'];
+  const i = map.indexOf(id);
+  if (navBtns[i]) navBtns[i].classList.add('active');
+  const bBtns = document.querySelectorAll('.bnav-btn');
+  if (bBtns[i]) bBtns[i].classList.add('active');
+  if (id === 'dashboard') renderDashboard();
+  if (id === 'tracker')   renderLectures();
+  if (id === 'revision')  renderRevision();
+  if (id === 'tests')     renderTests();
+}
+
+// ============ COUNTDOWN ============
+function updateCountdown() {
+  const jeeMain = new Date('2027-01-22');
+  const now = new Date();
+  const diff = Math.ceil((jeeMain - now) / 86400000);
+  document.getElementById('countdown').textContent = diff + 'd to JEE Main';
+}
+updateCountdown();
+setInterval(updateCountdown, 60000);
+
+// ============ TRACKER ============
+function toggleAddForm() {
+  document.getElementById('add-form').classList.toggle('open');
+}
+
+function addLecture() {
+  const title   = document.getElementById('lec-title').value.trim();
+  const subject = document.getElementById('lec-subject').value;
+  const chapter = document.getElementById('lec-chapter').value.trim();
+  const num     = document.getElementById('lec-num').value.trim();
+  if (!title) { toast('Title daalo!'); return; }
+  lectures.push({ id: uid(), title, subject, chapter, num, done: false, doneDate: null });
+  save();
+  ['lec-title','lec-chapter','lec-num'].forEach(id => document.getElementById(id).value = '');
+  renderLectures();
+  renderDashboard();
+  toast('Lecture added ✓');
+}
+
+function toggleLecture(id) {
+  const l = lectures.find(x => x.id === id);
+  if (!l) return;
+  l.done = !l.done;
+  l.doneDate = l.done ? today() : null;
+  save();
+  renderLectures();
+  renderDashboard();
+  if (l.done) toast('✓ Completed! Don\'t forget to revise.');
+}
+
+function deleteLecture(id) {
+  lectures = lectures.filter(x => x.id !== id);
+  save();
+  renderLectures();
+  renderDashboard();
+  toast('Deleted');
+}
+
+function setFilter(f, btn) {
+  filter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderLectures();
+}
+
+function renderLectures() {
+  const list = document.getElementById('lecture-list');
+  const filtered = filter === 'all' ? lectures : lectures.filter(l => l.subject === filter);
+  if (!filtered.length) {
+    list.innerHTML = '<div class="empty-state"><div class="icon">📭</div>Koi lecture nahi. Add karo!</div>';
+    return;
+  }
+  // Sort: pending first
+  const sorted = [...filtered].sort((a,b) => a.done - b.done);
+  list.innerHTML = sorted.map(l => {
+    const col = SUBJECTS[l.subject].color;
+    return `<div class="lecture-item ${l.done ? 'done' : ''}" style="--l-color:${col}">
+      <div class="lec-check" onclick="toggleLecture('${l.id}')">${l.done ? '✓' : ''}</div>
+      <div class="lec-info" onclick="toggleLecture('${l.id}')">
+        <div class="lec-title">${l.num ? `[${l.num}] ` : ''}${l.title}</div>
+        <div class="lec-meta">${SUBJECTS[l.subject].label}${l.chapter ? ' · ' + l.chapter : ''}${l.doneDate ? ' · Done: ' + l.doneDate : ''}</div>
+      </div>
+      <div class="lec-subject-tag" style="color:${col}">${l.subject.toUpperCase()}</div>
+      <span onclick="deleteLecture('${l.id}')" style="cursor:pointer;color:var(--text3);font-size:1rem;padding:0 4px;flex-shrink:0">×</span>
+    </div>`;
+  }).join('');
+}
+
+// ============ REVISION ============
+function addTopic() {
+  const name    = document.getElementById('topic-name').value.trim();
+  const subject = document.getElementById('topic-subject').value;
+  if (!name) { toast('Topic name daalo!'); return; }
+  const firstDue = addDays(today(), 1);
+  topics.push({ id: uid(), name, subject, stage: 0, nextDue: firstDue, addedOn: today() });
+  save();
+  document.getElementById('topic-name').value = '';
+  renderRevision();
+  renderDashboard();
+  toast('Topic added ✓ First revision: ' + firstDue);
+}
+
+function markRevised(id) {
+  const t = topics.find(x => x.id === id);
+  if (!t) return;
+  if (t.stage >= INTERVALS.length) { toast('All revisions done! 🎉'); return; }
+  t.stage += 1;
+  if (t.stage < INTERVALS.length) {
+    t.nextDue = addDays(today(), INTERVALS[t.stage]);
+    toast('✓ Next revision: ' + t.nextDue);
+  } else {
+    t.nextDue = null;
+    toast('🎉 Topic mastered! All 4 revisions done.');
+  }
+  save();
+  renderRevision();
+  renderDashboard();
+}
+
+function deleteTopic(id) {
+  topics = topics.filter(x => x.id !== id);
+  save();
+  renderRevision();
+  renderDashboard();
+  toast('Deleted');
+}
+
+function renderRevision() {
+  const todayStr = today();
+  const overdue = [], todayArr = [], upcoming = [];
+  topics.filter(t => t.stage < INTERVALS.length && t.nextDue).forEach(t => {
+    const diff = diffDays(t.nextDue);
+    if (diff < 0) overdue.push(t);
+    else if (diff === 0) todayArr.push(t);
+    else upcoming.push(t);
+  });
+
+  document.getElementById('overdue-count').textContent = overdue.length;
+  document.getElementById('today-count').textContent   = todayArr.length;
+
+  document.getElementById('overdue-list').innerHTML  = renderTopicList(overdue, 'overdue');
+  document.getElementById('today-list').innerHTML    = renderTopicList(todayArr, 'today');
+  document.getElementById('upcoming-list').innerHTML = renderTopicList(upcoming.slice(0,8), 'upcoming');
+}
+
+function renderTopicList(arr, type) {
+  if (!arr.length) return `<div class="empty-state" style="padding:16px;font-size:0.8rem">Kuch nahi 🙏</div>`;
+  return arr.map(t => {
+    const col = SUBJECTS[t.subject].color;
+    const diff = diffDays(t.nextDue);
+    let dueLabel = diff === 0 ? 'Due today' : diff < 0 ? `${-diff}d overdue` : `in ${diff}d`;
+    let dueClass = diff < 0 ? 'overdue' : diff === 0 ? 'today' : 'upcoming';
+    const dots = INTERVALS.map((_,i) =>
+      `<div class="stage-dot ${i < t.stage ? 'filled' : ''}"></div>`).join('');
+    return `<div class="topic-card ${type}">
+      <div class="topic-info">
+        <div class="topic-name">${t.name}</div>
+        <div style="font-size:0.7rem;color:${col};margin-top:2px">${SUBJECTS[t.subject].label}</div>
+        <div class="topic-due ${dueClass}">${dueLabel} · Stage ${t.stage+1}/4</div>
+        <div class="topic-stage" style="margin-top:6px">${dots}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="revise-btn" onclick="markRevised('${t.id}')">✓ Revised</button>
+        <span onclick="deleteTopic('${t.id}')" style="cursor:pointer;color:var(--text3);font-size:0.75rem">remove</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ============ TESTS ============
+function renderTests() {
+  const grid = document.getElementById('test-grid');
+  grid.innerHTML = TESTS.map((name, i) => {
+    const key = 'test_' + i;
+    const score = scores[key] || '';
+    const isMajor = name.includes('Major');
+    const isGrand = name.includes('Grand');
+    const accentCol = isGrand ? '#f76a8a' : isMajor ? '#f7a26a' : '#7c6af7';
+    return `<div class="test-card ${score ? 'completed' : ''}" style="border-top:2px solid ${accentCol}20">
+      <div class="test-num" style="color:${accentCol}">#${i+1} · ${isGrand?'GRAND':isMajor?'MAJOR':'PART'}</div>
+      <div class="test-name">${name}</div>
+      <input class="test-score-input" type="text" placeholder="Score / 300"
+        value="${score}"
+        onchange="saveScore(${i}, this.value)"
+        style="color:${accentCol}">
+      ${score ? `<div class="test-date" style="color:${accentCol}">✓ Score recorded</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function saveScore(i, val) {
+  if (val.trim()) scores['test_' + i] = val.trim();
+  else delete scores['test_' + i];
+  save();
+  const done = Object.keys(scores).filter(k => k.startsWith('test_')).length;
+  document.getElementById('stat-tests').textContent = done;
+  toast('Score saved ✓');
+}
+
+// ============ DASHBOARD ============
+function renderDashboard() {
+  const todayStr = today();
+
+  // Stats
+  const doneTodayCount = lectures.filter(l => l.done && l.doneDate === todayStr).length;
+  const totalDone = lectures.filter(l => l.done).length;
+  const testsDone = Object.keys(scores).filter(k => k.startsWith('test_')).length;
+  const dueRevisions = topics.filter(t => t.stage < INTERVALS.length && t.nextDue && diffDays(t.nextDue) <= 0).length;
+
+  document.getElementById('stat-today').textContent     = doneTodayCount;
+  document.getElementById('stat-total').textContent     = totalDone;
+  document.getElementById('stat-total-all').textContent = lectures.length;
+  document.getElementById('stat-tests').textContent     = testsDone;
+  document.getElementById('stat-revisions').textContent = dueRevisions;
+
+  // Subject progress
+  const subGrid = document.getElementById('subject-progress');
+  subGrid.innerHTML = Object.entries(SUBJECTS).map(([key, sub]) => {
+    const total = lectures.filter(l => l.subject === key).length;
+    const done  = lectures.filter(l => l.subject === key && l.done).length;
+    const pct   = total ? Math.round((done/total)*100) : 0;
+    return `<div class="subject-card">
+      <div class="subject-header">
+        <div class="subject-name">
+          <div class="subject-dot" style="--s-color:${sub.color}"></div>
+          ${sub.label}
         </div>
-        {questions.map((q,i)=>{
-          const ua=selected[i]?.[0]; const ok=ua===q.answer;
-          return(
-            <div key={i} style={{...glassCard,marginBottom:10,border:`1px solid ${ok?"#34d39933":"#f8717133"}`}}>
-              <div style={{fontSize:10,color:G.muted,marginBottom:6}}>Q{q.qNum}</div>
-              <div style={{fontSize:12,color:G.text,marginBottom:10,lineHeight:1.6}}>{q.question}</div>
-              {q.options.map(opt=>(
-                <div key={opt} style={{fontSize:11,padding:"5px 10px",borderRadius:8,marginBottom:4,background:opt[0]===q.answer?"#34d39918":opt[0]===ua&&!ok?"#f8717118":"transparent",color:opt[0]===q.answer?G.green:opt[0]===ua&&!ok?G.red:G.muted}}>{opt}</div>
-              ))}
-              <div style={{fontSize:11,color:"#c4b5fd",marginTop:8,lineHeight:1.5}}>💡 {q.explanation}</div>
-            </div>
-          );
-        })}
-        <BigBtn color={G.accent} onClick={()=>setState(p=>({...p,active:false,questions:[],score:null,qNums:""}))}>New Practice Session</BigBtn>
+        <div class="subject-count">${done}/${total} · ${pct}%</div>
       </div>
-    );
+      <div class="progress-bar">
+        <div class="progress-fill" style="--s-color:${sub.color};width:${pct}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Due revisions on dashboard
+  const dueEl = document.getElementById('dash-due-revisions');
+  const dueTopics = topics.filter(t => t.stage < INTERVALS.length && t.nextDue && diffDays(t.nextDue) <= 0);
+  if (!dueTopics.length) {
+    dueEl.innerHTML = '<div style="color:var(--accent3);font-size:0.85rem">🎉 Koi revision pending nahi!</div>';
+  } else {
+    dueEl.innerHTML = dueTopics.slice(0,5).map(t => {
+      const col = SUBJECTS[t.subject].color;
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="width:6px;height:6px;border-radius:50%;background:${col};box-shadow:0 0 6px ${col};flex-shrink:0"></div>
+        <div style="flex:1;font-size:0.85rem">${t.name}</div>
+        <div style="font-size:0.7rem;color:${col};font-family:'Space Mono',monospace">${SUBJECTS[t.subject].label}</div>
+        <button class="revise-btn" style="font-size:0.7rem;padding:4px 10px" onclick="markRevised('${t.id}');renderDashboard()">✓</button>
+      </div>`;
+    }).join('') + (dueTopics.length > 5 ? `<div style="font-size:0.75rem;color:var(--text2);padding-top:8px">...aur ${dueTopics.length-5} more</div>` : '');
   }
-
-  const q=questions[current];
-  return(
-    <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-        <STitle>Q{q.qNum}</STitle>
-        <span style={{fontSize:12,color:SUB_COLOR[subject],fontWeight:600}}>{current+1}/{questions.length}</span>
-      </div>
-      <div style={{height:4,background:"rgba(255,255,255,0.06)",borderRadius:2,marginBottom:16,overflow:"hidden"}}>
-        <div style={{height:"100%",width:`${((current+1)/questions.length)*100}%`,background:G.accent,borderRadius:2,transition:"width .3s"}}/>
-      </div>
-      <GCard>
-        <div style={{fontSize:14,color:G.text,lineHeight:1.7,marginBottom:18}}>{q.question}</div>
-        {q.options.map(opt=>{
-          const sel=selected[current]===opt;
-          return<button key={opt} onClick={()=>setState(p=>({...p,selected:{...p.selected,[current]:opt}}))} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",marginBottom:10,borderRadius:12,background:sel?"rgba(129,140,248,0.12)":"rgba(255,255,255,0.03)",border:`1px solid ${sel?G.accent:G.border}`,color:sel?G.accent:G.text,cursor:"pointer",fontFamily:G.font,fontSize:13,fontWeight:sel?600:400,transition:"all .15s"}}>{opt}</button>;
-        })}
-      </GCard>
-      <div style={{display:"flex",gap:10,marginTop:14}}>
-        {current>0&&<BigBtn color={G.muted} onClick={()=>setState(p=>({...p,current:p.current-1}))}>← Prev</BigBtn>}
-        {current<questions.length-1
-          ?<BigBtn color={G.accent} onClick={()=>setState(p=>({...p,current:p.current+1}))}>Next →</BigBtn>
-          :<BigBtn color={G.green} onClick={()=>{ const{questions:qs,selected:sel}=state; let c=0; qs.forEach((q,i)=>{if(sel[i]?.[0]===q.answer)c++;}); setState(p=>({...p,score:c})); }}>Submit ✓</BigBtn>
-        }
-      </div>
-    </div>
-  );
 }
 
-/* ══ FOCUS ═══════════════════════════════════════════════════════════════════ */
-function FocusTab({onStart,sessions,todaySecs}){
-  const totalSecs=sessions.reduce((a,b)=>a+b.secs,0);
-  return(
-    <div>
-      <STitle>🎯 Focus Mode</STitle>
-      <div style={{...glassCard,textAlign:"center",marginBottom:14,background:"linear-gradient(135deg,rgba(67,56,202,0.2),rgba(124,58,237,0.15))"}}>
-        <div style={{fontSize:52,marginBottom:12}}>🎯</div>
-        <div style={{fontSize:18,fontWeight:700,color:G.text,marginBottom:6}}>Deep Work Session</div>
-        <div style={{fontSize:13,color:G.muted,marginBottom:24}}>Fullscreen lock · All distractions blocked<br/>Timer auto-saves when you end</div>
-        <BigBtn color={G.accent} onClick={onStart}>Enter Focus Mode 🚀</BigBtn>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
-        <GCard style={{textAlign:"center"}}>
-          <div style={{fontSize:11,color:G.muted,marginBottom:4}}>Today</div>
-          <div style={{fontSize:24,fontWeight:800,color:G.green,fontFamily:G.mono}}>{msToHMS(todaySecs*1000)}</div>
-        </GCard>
-        <GCard style={{textAlign:"center"}}>
-          <div style={{fontSize:11,color:G.muted,marginBottom:4}}>All Time</div>
-          <div style={{fontSize:24,fontWeight:800,color:G.blue,fontFamily:G.mono}}>{msToHMS(totalSecs*1000)}</div>
-        </GCard>
-      </div>
-      <GCard>
-        <ColLabel>Recent Sessions</ColLabel>
-        {sessions.slice(-6).reverse().map((s,i)=>(
-          <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${G.border}`}}>
-            <span style={{fontSize:12,color:G.muted}}>{s.date}</span>
-            <span style={{fontSize:12,color:G.accent,fontFamily:G.mono,fontWeight:700}}>{msToHMS(s.secs*1000)}</span>
-          </div>
-        ))}
-        {!sessions.length&&<div style={{fontSize:12,color:G.muted,textAlign:"center",padding:16}}>No sessions yet — start your first! 💪</div>}
-      </GCard>
-    </div>
-  );
-}
-
-/* ══ STATS ════════════════════════════════════════════════════════════════════ */
-function StatsTab({sessions,tasks}){
-  const days=Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); return d.toISOString().slice(0,10); });
-  const weekData=days.map(date=>({date,secs:sessions.filter(s=>s.date===date).reduce((a,b)=>a+b.secs,0)}));
-  const maxSecs=Math.max(...weekData.map(d=>d.secs),1);
-  const totalTasks=Object.keys(DP_CHAPTERS).flatMap(s=>DP_CHAPTERS[s].flatMap(c=>TASK_TYPES)).length;
-  const doneTasks=Object.values(tasks).filter(Boolean).length;
-
-  return(
-    <div>
-      <STitle>📊 Weekly Stats</STitle>
-      <GCard>
-        <ColLabel>Study Time — Last 7 Days</ColLabel>
-        <div style={{display:"flex",alignItems:"flex-end",gap:8,height:90,marginTop:12,marginBottom:4}}>
-          {weekData.map((d,i)=>(
-            <div key={d.date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-              <div style={{width:"100%",background:d.secs?`linear-gradient(180deg,${G.accent},#6366f1)`:G.border,height:`${Math.max(3,(d.secs/maxSecs)*72)}px`,borderRadius:"5px 5px 0 0",transition:"height .4s",opacity:d.secs?1:0.3}}/>
-              <div style={{fontSize:8,color:G.muted}}>{d.date.slice(5)}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{fontSize:11,color:G.muted,textAlign:"right"}}>Total: {msToHMS(weekData.reduce((a,b)=>a+b.secs,0)*1000)}</div>
-      </GCard>
-
-      <GCard style={{marginTop:12}}>
-        <ColLabel>Subject Completion</ColLabel>
-        {Object.keys(DP_CHAPTERS).map(sub=>{
-          const chs=DP_CHAPTERS[sub];
-          const total=chs.length*TASK_TYPES.length;
-          const done=chs.flatMap(ch=>TASK_TYPES.map(t=>tasks[`${sub}__${ch}__${t}`])).filter(Boolean).length;
-          const pct=Math.round((done/total)*100);
-          return(
-            <div key={sub} style={{marginBottom:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-                <span style={{fontSize:12,fontWeight:600,color:SUB_COLOR[sub]}}>{SUB_ICON[sub]} {sub}</span>
-                <span style={{fontSize:12,color:G.muted,fontFamily:G.mono}}>{done}/{total}</span>
-              </div>
-              <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:3,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${pct}%`,background:SUB_COLOR[sub],borderRadius:3,transition:"width .4s"}}/>
-              </div>
-            </div>
-          );
-        })}
-      </GCard>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:12}}>
-        {[
-          {l:"Tasks Done",v:doneTasks,c:G.green},
-          {l:"Remaining",v:totalTasks-doneTasks,c:G.amber},
-          {l:"Sessions",v:sessions.length,c:G.blue},
-        ].map(({l,v,c})=>(
-          <GCard key={l} style={{textAlign:"center",padding:14}}>
-            <div style={{fontSize:26,fontWeight:800,color:c}}>{v}</div>
-            <div style={{fontSize:10,color:G.muted,marginTop:2}}>{l}</div>
-          </GCard>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ══ WEIGHT/NOTES ════════════════════════════════════════════════════════════ */
-function WeightTab({weights,setWeights,newW,setNewW,cloudSave}){
-  function add(){
-    if(!newW.label.trim()||!newW.value.trim()) return;
-    const entry={...newW,date:todayKey(),id:Date.now()};
-    const next=[...weights,entry]; setWeights(next); cloudSave("weights",next);
-    setNewW({label:"",value:""});
-  }
-  function remove(id){
-    const next=weights.filter(w=>w.id!==id); setWeights(next); cloudSave("weights",next);
-  }
-  const priorityColor={HIGH:G.red,MEDIUM:G.amber,LOW:G.green};
-
-  return(
-    <div>
-      <STitle>📝 Task Weight Log</STitle>
-      <GCard>
-        <ColLabel>Add Entry</ColLabel>
-        <input value={newW.label} onChange={e=>setNewW(w=>({...w,label:e.target.value}))} placeholder="Task / Topic name" style={inpStyle}/>
-        <input value={newW.value} onChange={e=>setNewW(w=>({...w,value:e.target.value}))} placeholder="Weight / Priority (e.g. HIGH, 3 hrs, 80%)" style={{...inpStyle,marginTop:8}}/>
-        <BigBtn color={G.accent} onClick={add} style={{marginTop:12}}>+ Add Entry</BigBtn>
-      </GCard>
-
-      <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:10}}>
-        {weights.slice().reverse().map(w=>{
-          const pc=priorityColor[w.value.toUpperCase()]||G.accent;
-          return(
-            <div key={w.id} style={{...glassCard,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:600,color:G.text}}>{w.label}</div>
-                <div style={{fontSize:10,color:G.muted,marginTop:2}}>{w.date}</div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:11,color:pc,background:pc+"22",padding:"4px 12px",borderRadius:20,fontWeight:700}}>{w.value}</span>
-                <button onClick={()=>remove(w.id)} style={{background:"none",border:"none",color:G.muted,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
-              </div>
-            </div>
-          );
-        })}
-        {!weights.length&&<div style={{fontSize:12,color:G.muted,textAlign:"center",padding:32}}>No entries yet. Add your first task weight!</div>}
-      </div>
-    </div>
-  );
-}
-
-/* ══ Primitives ══════════════════════════════════════════════════════════════ */
-function GCard({children,style}){
-  return<div style={{...glassCard,...style}}>{children}</div>;
-}
-function ColLabel({children,style}){
-  return<div style={{fontSize:10,letterSpacing:2,color:G.muted,textTransform:"uppercase",marginBottom:8,fontWeight:600,...style}}>{children}</div>;
-}
-function Row({children}){
-  return<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>{children}</div>;
-}
-function STitle({children}){
-  return<div style={{fontSize:16,fontWeight:800,color:G.text,marginBottom:16,letterSpacing:-0.3}}>{children}</div>;
-}
-function BigBtn({children,color,onClick,disabled,style}){
-  return(
-    <button onClick={onClick} disabled={disabled} style={{width:"100%",padding:"13px",background:disabled?"rgba(255,255,255,0.04)":`linear-gradient(135deg,${color}22,${color}11)`,border:`1px solid ${disabled?G.border:color+"66"}`,color:disabled?G.muted:color,borderRadius:12,cursor:disabled?"not-allowed":"pointer",fontFamily:G.font,fontSize:14,fontWeight:700,transition:"all .2s",...style}}>{children}</button>
-  );
-}
-const selStyle={width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${G.border}`,color:G.text,padding:"10px 12px",borderRadius:10,fontFamily:G.font,fontSize:13,marginBottom:14,outline:"none"};
-const inpStyle={width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${G.border}`,color:G.text,padding:"10px 12px",borderRadius:10,fontFamily:G.font,fontSize:13,outline:"none",boxSizing:"border-box"};
+// ============ INIT ============
+renderDashboard();
+renderLectures();
+renderRevision();
+renderTests();
+</script>
+</body>
+</html>
